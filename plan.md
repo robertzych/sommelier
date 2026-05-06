@@ -55,6 +55,42 @@ sommelier/
 └── mcp_server.py           # MCP tool: search_pinot(query, pinot_version=None)
 ```
 
+### Ingestion Pipeline
+
+```
+Pinot docs repo (cloned locally)
+        ↓
+   loader.py       ← find and read raw .md files
+        ↓
+   chunker.py      ← clean GitBook syntax, split into chunks with metadata
+        ↓
+   indexer.py      ← embed (dense + sparse), delete stale, insert new
+```
+
+**loader.py** walks the cloned Apache Pinot docs repo and reads raw markdown files. Purely I/O — finds `.md` files, reads content, and returns structured records with enough metadata to reconstruct a source URL:
+
+```python
+{
+    "raw_text": "...",
+    "file_path": "docs/basics/concepts/table.md",
+    "pinot_version": "1.2",  # derived from repo tag or config
+}
+```
+
+GitHub API for issues/PRs/code is a V1.1 addition — V1 is docs only.
+
+**chunker.py** takes each raw markdown record and produces a list of chunk payloads. See the Chunking Strategy section for full detail. In brief: strip GitBook syntax, split on markdown headers (`MarkdownHeaderTextSplitter`), then recursively split oversized sections (`RecursiveCharacterTextSplitter`, 512 tokens, 50 overlap). Section headers (`h1`/`h2`/`h3`) propagate as metadata on every chunk for source citations.
+
+**indexer.py** takes chunk payloads and writes them to Qdrant. Three responsibilities:
+
+1. **Embed: dense + sparse** — for each new chunk, generates a dense vector (`bge-base-en-v1.5`, 768 dims via FastEmbed) and a sparse BM25 vector (`Qdrant/bm25` via FastEmbed).
+2. **Delete stale** — per file: scroll existing point IDs, diff against new IDs, delete orphans. See Incremental Update Logic for full detail.
+3. **Insert new** — insert chunks whose content-hash point ID is not already in Qdrant.
+
+Ingestion is triggered manually (e.g. `python -m sommelier ingest --docs-path ./pinot-docs --version 1.2`). Subsequent runs skip unchanged chunks automatically.
+
+---
+
 ### Qdrant Collection Schema
 
 ```python
@@ -127,7 +163,32 @@ def index_file(client, collection_name: str, file_path: str, new_chunks: list[st
 
 There are no updates — only inserts and deletes. A modified chunk always produces a new point ID, so the operation is always delete-old + insert-new.
 
-### Retrieval Pipeline (two-stage)
+### Retrieval Pipeline
+
+```
+User query
+    ↓
+router.py       ← classify query type, set final_top_k
+    ↓
+retriever.py    ← hybrid search (dense + sparse + RRF) → top 20 candidates
+    ↓
+reranker.py     ← cross-encoder reranking → top 5 (or 10) chunks
+    ↓
+LLM context
+```
+
+**router.py** runs first, before any vector search. A cheap LLM call classifies the query as `"specific"` (exact config params, version-specific behavior, precise how-tos) or `"broad"` (conceptual questions, comparisons, architecture overviews). This controls how many chunks reach the LLM: specific queries get `rerank_top_k` (default 5), broad queries get `rerank_top_k * 2` (default 10). Specific queries need tight, precise context — more chunks introduce noise. Broad queries benefit from wider coverage since the answer may span multiple sections.
+
+**retriever.py** executes hybrid search against Qdrant and returns the top `retrieval_top_k` candidates (default 20) in a single `query_points` call:
+
+- **Dense search** — embeds the query with the configured dense model and retrieves top candidates by cosine similarity. Captures semantic meaning; good for paraphrased or conceptual queries.
+- **Sparse search** — encodes the query with BM25 via FastEmbed and retrieves top candidates by keyword overlap. Captures exact term matches — critical for Pinot's dense technical vocabulary (config keys, class names, port numbers).
+- **RRF fusion** — Reciprocal Rank Fusion merges the two ranked lists natively in Qdrant. Chunks that rank well in both lists rise to the top; chunks that appear in only one are demoted. No manual score normalization needed.
+- **Version filter** — if `pinot_version` is set, a `FieldCondition` filter restricts results to chunks tagged with that version.
+
+**reranker.py** narrows the 20 candidates to `final_top_k` using a cross-encoder, which scores each (query, chunk) pair jointly rather than independently — more accurate than embedding similarity alone. Two modes: FastEmbed cross-encoder (default, local, no API key) or Cohere Rerank (optional, higher quality, requires `COHERE_API_KEY`).
+
+The two-stage design (vector search → cross-encoder) exists because vector search is fast but imprecise, and cross-encoder reranking is precise but slow at scale. The 20→5 funnel gets the best of both: fast broad retrieval to prune the search space, then precise reranking on a small candidate set.
 
 ```python
 # Stage 1 — LLM query classifier (fast, cheap)
