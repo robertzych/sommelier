@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Qdrant local storage
+qdrant_storage/
+
+# Traces and logs
+*.jsonl
+*.jsonl.*
+
+# Config with secrets
+sommelier.toml
+
+# Backups
+*.bak
+
+# macOS
+.DS_Store
