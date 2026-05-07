@@ -732,7 +732,7 @@ For a user cloning the repo for the first time:
 
 ```bash
 # 1. Install dependencies
-pip install qdrant-client[fastembed] litellm langchain-text-splitters
+uv sync
 
 # 2. Configure
 cp sommelier.toml.example sommelier.toml
@@ -754,25 +754,34 @@ Ingestion must complete before the MCP server can answer questions. A full first
 
 ## Next Steps (in order)
 
-1. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
-2. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
-3. Validate in a notebook: `pip install qdrant-client[fastembed] litellm langchain-text-splitters` → test local Qdrant + hybrid search + bge-base-en-v1.5 + BM25 + FastEmbed cross-encoder reranking end-to-end
-4. Set up Python package: `pyproject.toml` with dependencies, `sommelier/__init__.py`, CLI entry point (`python -m sommelier ingest / logs`)
-5. Write `vector_store/qdrant.py`: `get_client(config)` + `ensure_collection(client, config)`; used by indexer and retriever
-6. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
-7. Write `ingestion/chunker.py`: strip GitBook syntax → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter.from_tiktoken_encoder` (512 tokens, 50 overlap); propagate `h1`/`h2`/`h3` as metadata
-8. Write `ingestion/loader.py` + `ingestion/indexer.py`: walk `apache/pinot` docs → construct `source_url` → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID
-9. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates
-10. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`
-11. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming
-12. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
-13. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
-14. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
-15. Add `tracer.emit()` calls to `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
-16. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
-17. Write `README.md`: setup instructions (cold start), configuration reference, MCP client wiring
-18. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
-19. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
+### Foundation
+1. Set up Python package: `pyproject.toml` with dependencies (managed via `uv`), `sommelier/__init__.py`, CLI entry point (`python -m sommelier ingest / logs`)
+2. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
+
+### Ingestion Pipeline
+1. Write `vector_store/qdrant.py`: `get_client(config)` + `ensure_collection(client, config)`; used by indexer and retriever
+2. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
+3. Write `ingestion/chunker.py`: strip GitBook syntax → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter.from_tiktoken_encoder` (512 tokens, 50 overlap); propagate `h1`/`h2`/`h3` as metadata
+4. Write `ingestion/loader.py` + `ingestion/indexer.py`: walk `apache/pinot` docs → construct `source_url` → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID; emit per-file inserted/deleted/skipped/errors via `tracer.start_trace(event_type="ingestion")` + `tracer.flush()`
+
+### Retrieval Pipeline
+1. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates; emit candidates (source_url, rrf_score, snippet) to tracer
+2. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`; emit reranked results (source_url, cross_encoder_score) to tracer
+3. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
+4. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
+5. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming; emit tokens/latency/response to tracer
+
+### Observability
+1. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
+2. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
+
+### Evaluations
+1. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
+2. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
+
+### Packaging
+1. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; add `tracer.start_trace()` + `tracer.flush()` per request
+2. Write `README.md`: setup instructions (cold start), configuration reference, MCP client wiring
 
 ## Verification
 
