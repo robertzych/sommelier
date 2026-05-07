@@ -53,10 +53,9 @@ sommelier/
 │   ├── tracer.py           # Tracer singleton; each pipeline stage emits events to it
 │   ├── exporters.py        # LocalJSONExporter (JSON lines + rotation) + LangfuseExporter
 │   └── cli.py              # `python -m sommelier logs --review` log review + golden set promotion
-├── evals/
-│   ├── golden_set.json     # Expert-written questions, expected sources, baseline scores
-│   └── eval.py             # Eval runner: queries Sommelier, LLM judge scoring, comparison report
-└── mcp_server.py           # MCP tool: search_pinot(query, pinot_version=None)
+└── evals/
+    ├── golden_set.json     # Expert-written questions, expected sources, baseline scores
+    └── eval.py             # Eval runner: queries Sommelier, LLM judge scoring, comparison report
 ```
 
 ```
@@ -126,10 +125,14 @@ client.create_collection(
 ```python
 payload = {
     "text":          chunk_text,
-    "source_url":    "https://docs.pinot.apache.org/...",
-    "doc_type":      "documentation",       # or "github_issue", "java_code"
-    "pinot_version": "1.2",                 # stored as metadata, default=latest
-    "content_hash":  sha256(chunk_text),    # used as point ID for dedup
+    "source_url":    "https://docs.pinot.apache.org/...",  # canonical URL for citation
+    "file_path":     "docs/basics/concepts/table.md",      # relative path in repo
+    "doc_type":      "documentation",                      # or "github_issue", "java_code"
+    "pinot_version": "1.2",                                # stored as metadata, default=latest
+    "h1":            "Concepts",                           # section headers from splitter
+    "h2":            "Table",
+    "h3":            "Table Types",
+    "content_hash":  sha256(chunk_text),                   # used as point ID for dedup
 }
 ```
 
@@ -247,6 +250,7 @@ tracer.flush()  # writes completed trace via configured exporter
   "event_type": "query",
   "trace_id": "<uuid>",
   "ts": "2026-05-07T10:23:01Z",
+  "prompt_version": "abc1234",
   "query": "what is the default broker port?",
   "pinot_version": "1.2",
   "candidates": [
@@ -450,13 +454,15 @@ headers = [("#", "h1"), ("##", "h2"), ("###", "h3")]
 md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers)
 header_splits = md_splitter.split_text(clean_gitbook(raw_markdown))
 
-char_splitter = RecursiveCharacterTextSplitter(chunk_size=512, chunk_overlap=50)
+char_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    chunk_size=512, chunk_overlap=50
+)
 chunks = char_splitter.split_documents(header_splits)
 ```
 
 Section titles (`h1`, `h2`, `h3`) are stored as metadata on every chunk — used for source citations and section-level filtering.
 
-### Updated Chunk Payload
+### Chunk Payload
 
 ```python
 payload = {
@@ -513,9 +519,7 @@ response = litellm.completion(
 )
 ```
 
-**Conversation memory:** last `memory_turns` (default 5) turns included in each call.
-
-**Response format:** markdown with source citations. System prompt instructs the model to cite section titles and URLs from retrieved chunk metadata.
+**Conversation memory:** last `memory_turns` (default 5) turns included in each call. Each turn counts as one user message + one assistant message; 5 turns = 10 messages prepended before the current user message.
 
 ---
 
@@ -642,6 +646,8 @@ python evals/eval.py --golden-set evals/golden_set.json --judge claude
 
 Output:
 ```
+Prompt version: abc1234 (2026-05-07)
+
 ID     Question (truncated)                    Sommelier  Claude  Docs AI
 q001   How do I configure an upsert table?    3/3        1/3     2/3
 q002   What is the default broker port?       3/3        2/3     3/3
