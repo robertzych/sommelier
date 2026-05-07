@@ -42,7 +42,7 @@ sommelier/
 ├── retrieval/
 │   ├── retriever.py        # Hybrid search: dense + sparse → RRF → top 20 candidates
 │   ├── reranker.py         # Cross-encoder reranking: top 20 → top 5 (FastEmbed or Cohere)
-│   └── router.py           # LLM query classifier → adjusts rerank_top_k per query type
+│   └── router.py           # V2: LLM query classifier → adjusts rerank_top_k per query type
 ├── inference/
 │   └── llm.py              # LiteLLM wrapper: loads prompts/system_prompt.md, builds user message, streams response
 ├── vector_store/
@@ -182,16 +182,14 @@ There are no updates — only inserts and deletes. A modified chunk always produ
 ```
 User query
     ↓
-router.py       ← classify query type, set final_top_k
-    ↓
 retriever.py    ← hybrid search (dense + sparse + RRF) → top 20 candidates
     ↓
-reranker.py     ← cross-encoder reranking → top 5 (or 10) chunks
+reranker.py     ← cross-encoder reranking → top rerank_top_k chunks
     ↓
 LLM context
 ```
 
-**router.py** runs first, before any vector search. A cheap LLM call classifies the query as `"specific"` (exact config params, version-specific behavior, precise how-tos) or `"broad"` (conceptual questions, comparisons, architecture overviews). This controls how many chunks reach the LLM: specific queries get `rerank_top_k` (default 5), broad queries get `rerank_top_k * 2` (default 10). Specific queries need tight, precise context — more chunks introduce noise. Broad queries benefit from wider coverage since the answer may span multiple sections.
+**V2 — router.py** (deferred): an LLM query classifier that labels queries as `"specific"` or `"broad"` and doubles `rerank_top_k` for broad queries. Deferred because the added LLM call during inference adds latency and complexity before the base pipeline is validated.
 
 **retriever.py** executes hybrid search against Qdrant and returns the top `retrieval_top_k` candidates (default 20) in a single `query_points` call:
 
@@ -205,11 +203,7 @@ LLM context
 The two-stage design (vector search → cross-encoder) exists because vector search is fast but imprecise, and cross-encoder reranking is precise but slow at scale. The 20→5 funnel gets the best of both: fast broad retrieval to prune the search space, then precise reranking on a small candidate set.
 
 ```python
-# Stage 1 — LLM query classifier (fast, cheap)
-query_type = router.classify(query)          # "specific" | "broad"
-final_top_k = config.rerank_top_k if query_type == "specific" else config.rerank_top_k * 2
-
-# Stage 2 — Hybrid search: top retrieval_top_k candidates (default 20)
+# Stage 1 — Hybrid search: top retrieval_top_k candidates (default 20)
 candidates = client.query_points(
     collection_name="pinot_docs",
     prefetch=[
@@ -223,8 +217,8 @@ candidates = client.query_points(
     ) if version else None,
 )
 
-# Stage 3 — Cross-encoder reranking: top retrieval_top_k → final_top_k
-reranked = reranker.rerank(query, candidates, top_k=final_top_k)
+# Stage 2 — Cross-encoder reranking: top retrieval_top_k → rerank_top_k
+reranked = reranker.rerank(query, candidates, top_k=config.rerank_top_k)
 ```
 
 ### Observability
@@ -255,8 +249,6 @@ tracer.flush()  # writes completed trace via configured exporter
   "ts": "2026-05-07T10:23:01Z",
   "query": "what is the default broker port?",
   "pinot_version": "1.2",
-  "router_label": "specific",
-  "final_top_k": 5,
   "candidates": [
     {
       "source_url": "https://docs.pinot.apache.org/...",
@@ -271,9 +263,9 @@ tracer.flush()  # writes completed trace via configured exporter
     {"source_url": "...", "cross_encoder_score": 0.91}
   ],
   "stage_latency_ms": {
-    "router": 120, "retrieval": 85, "reranker": 310, "llm": 725
+    "retrieval": 85, "reranker": 310, "llm": 725
   },
-  "total_latency_ms": 1240,
+  "total_latency_ms": 1120,
   "tokens": {"input": 2100, "output": 180},
   "response": "The default Pinot broker port is 8099..."
 }
@@ -304,7 +296,6 @@ Both query and ingestion traces are written to the same JSON lines log (`event_t
 | Module | What to emit |
 |---|---|
 | `mcp_server.py` | `start_trace`, `flush` per request |
-| `retrieval/router.py` | `router_label`, `final_top_k` |
 | `retrieval/retriever.py` | `candidates` (source_url, rrf_score, snippet); if `debug_retrieval`: dense-only + sparse-only result sets |
 | `retrieval/reranker.py` | `reranked` (source_url, cross_encoder_score) |
 | `inference/llm.py` | `tokens`, `stage_latency_ms.llm`, `response` |
@@ -708,15 +699,14 @@ Human expert spot-checks a 20% sample of LLM judge scores per eval run to catch 
 6. Write `ingestion/loader.py` + `ingestion/indexer.py`: read `.md` files from cloned Pinot docs repo → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID
 7. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates
 8. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`
-9. Write `retrieval/router.py`: LLM query classifier → "specific" | "broad" → adjusts `rerank_top_k`
-10. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming
-11. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
-12. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
-13. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
-14. Add `tracer.emit()` calls to `router.py`, `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
-15. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
-16. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
-17. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
+9. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming
+10. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
+11. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
+12. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
+13. Add `tracer.emit()` calls to `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
+14. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
+15. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
+16. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
 
 ## Verification
 
@@ -737,12 +727,3 @@ The 5 sample questions from earlier planning are good seeds for the factual and 
 - Run `python -m sommelier logs --review`, promote a query, confirm new entry scaffolded into `golden_set.json`
 - Run `eval.py`: confirm retrieval precision is computed from `reranked[*].source_url` vs `expected_sources`
 - Confirm end-to-end query latency stays under 3 seconds with full tracing enabled
-
-**System prompt verification:**
-- Query traces include `prompt_version` field (git commit hash of `prompts/system_prompt.md`)
-- `eval.py` report header shows prompt version and delta vs. prior version
-- A query with no relevant retrieved context returns the expected can't-answer response
-- A query with partial context returns a partial answer with the "coverage was limited" note
-- Config keys and parameter values in responses match verbatim text from retrieved chunks
-- Every response ends with a **Sources** section with inline citation numbers and clickable URLs
-- Non-Pinot questions receive the scope-redirect response
