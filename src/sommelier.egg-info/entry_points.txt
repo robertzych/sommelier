@@ -1,0 +1,2 @@
+[console_scripts]
+sommelier = cli:main

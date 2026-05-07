@@ -728,14 +728,7 @@ Ingestion must complete before the MCP server can answer questions. A full first
 
 ---
 
-## Completed Steps (in order)
-
-
 ## Next Steps (in order)
-
-### Foundation
-1. Set up Python package: `pyproject.toml` with dependencies (managed via `uv`), `sommelier/__init__.py`, CLI entry point (`python -m sommelier ingest / query / logs`)
-2. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
 
 ### Ingestion Pipeline
 1. Write `vector_store/qdrant.py`: `get_client(config)` + `ensure_collection(client, config)`; used by indexer and retriever
@@ -770,4 +763,11 @@ Ingestion must complete before the MCP server can answer questions. A full first
 ### Packaging
 1. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; add `tracer.start_trace()` + `tracer.flush()` per request
 2. Write `README.md`: setup instructions (cold start), configuration reference, MCP client wiring
+
+
+## Completed Steps (in order)
+
+### Foundation
+1. Set up Python package: `pyproject.toml` with dependencies (managed via `uv`), src layout (`src/ingestion/`, `src/retrieval/`, etc.), CLI entry point (`sommelier ingest / query / logs` via `[project.scripts]`). Uses `setuptools.build_meta` backend; `onnxruntime<1.21.0` pinned for macOS x86_64 compatibility.
+2. Write `observability/tracer.py`: `Tracer` class with `start_trace(trace_id, event_type, **kwargs)`, `emit(stage, data)`, `flush()`; `Exporter` Protocol for later use by exporters.py; `prompt_version` computed from `git log -- prompts/system_prompt.md` at init (returns `"unknown"` until that file is committed); module-level `tracer` singleton.
 

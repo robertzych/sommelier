@@ -1,0 +1,14 @@
+pyproject.toml
+src/cli.py
+src/embeddings/__init__.py
+src/inference/__init__.py
+src/ingestion/__init__.py
+src/observability/__init__.py
+src/retrieval/__init__.py
+src/sommelier.egg-info/PKG-INFO
+src/sommelier.egg-info/SOURCES.txt
+src/sommelier.egg-info/dependency_links.txt
+src/sommelier.egg-info/entry_points.txt
+src/sommelier.egg-info/requires.txt
+src/sommelier.egg-info/top_level.txt
+src/vector_store/__init__.py
