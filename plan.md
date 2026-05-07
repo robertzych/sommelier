@@ -1,10 +1,10 @@
-# Sommelier: Vector Database Decision
+# Sommelier: System Design
 
 ## Context
 
-Sommelier is a RAG-based chatbot for Apache Pinot guidance, distributed as a public GitHub repo that users run locally as an MCP server. The design phase is ongoing with no code yet. This plan resolves the open checkbox: _"Choose a vector database, chunking strategy, and embedding/inference models"_ — specifically the vector DB and its supporting architecture.
+Sommelier is a RAG-based chatbot for Apache Pinot guidance, distributed as a public GitHub repo that users run locally as an MCP server. This document is the full system design: vector store, ingestion pipeline, retrieval pipeline, inference, observability, evaluation, and system prompt.
 
-The decision hinges on three constraints discovered during the interview:
+The vector store decision hinges on three constraints:
 1. **Hybrid search (BM25 + semantic) is required from day 1** — Apache Pinot has dense technical vocabulary and users range from beginners to power users querying exact config params.
 2. **FastEmbed as default embedding** — users who clone the repo should get working embeddings with zero API keys required.
 3. **Incremental updates via content hash** — the vector store persists between runs and re-embeds only changed documents.
@@ -80,13 +80,24 @@ Pinot docs repo (cloned locally)
    indexer.py      ← embed (dense + sparse), delete stale, insert new
 ```
 
-**loader.py** walks the cloned Apache Pinot docs repo and reads raw markdown files. Purely I/O — finds `.md` files, reads content, and returns structured records with enough metadata to reconstruct a source URL:
+**loader.py** walks the cloned Apache Pinot docs repo (`apache/pinot`, docs under `website/docs/`) and reads raw markdown files. Finds `.md` files, reads content, and constructs `source_url` by mapping the relative file path to the canonical GitBook URL:
+
+```python
+# file_path:   website/docs/basics/concepts/table.md
+# source_url:  https://docs.pinot.apache.org/basics/concepts/table
+def to_source_url(file_path: str) -> str:
+    path = file_path.removeprefix("website/docs/").removesuffix(".md")
+    return f"https://docs.pinot.apache.org/{path}"
+```
+
+Each record emitted:
 
 ```python
 {
     "raw_text": "...",
-    "file_path": "docs/basics/concepts/table.md",
-    "pinot_version": "1.2",  # derived from repo tag or config
+    "file_path": "website/docs/basics/concepts/table.md",
+    "source_url": "https://docs.pinot.apache.org/basics/concepts/table",
+    "pinot_version": "1.2",  # passed in via --version flag at ingest time
 }
 ```
 
@@ -103,6 +114,24 @@ GitHub API for issues/PRs/code is a V1.1 addition — V1 is docs only.
 Ingestion is triggered manually (e.g. `python -m sommelier ingest --docs-path ./pinot-docs --version 1.2`). Subsequent runs skip unchanged chunks automatically.
 
 ---
+
+### vector_store/qdrant.py
+
+Thin wrapper that reads `[vector_store]` config from `sommelier.toml` and returns a configured `QdrantClient`. Also owns collection creation (called once at startup if the collection doesn't exist).
+
+```python
+def get_client(config) -> QdrantClient:
+    if config.vector_store.backend == "qdrant_local":
+        return QdrantClient(path=config.vector_store.path)
+    else:
+        return QdrantClient(url=config.vector_store.docker_url)
+
+def ensure_collection(client: QdrantClient, config):
+    if not client.collection_exists("pinot_docs"):
+        client.create_collection(...)  # see schema below
+```
+
+Used by `indexer.py` (write) and `retriever.py` (read). All other modules go through this abstraction rather than instantiating `QdrantClient` directly.
 
 ### Qdrant Collection Schema
 
@@ -533,9 +562,9 @@ dense_model = "BAAI/bge-base-en-v1.5"  # change requires re-indexing
 openai_api_key = ""                  # required when provider = "openai"
 
 [inference]
-provider = "openai"                  # openai | ollama | anthropic | gemini (LiteLLM strings)
-model = "gpt-4o-mini"                # "ollama/llama3.1:8b" for fully local
-api_key = ""                         # not needed for Ollama
+model = "gpt-4o-mini"                # LiteLLM model string; provider inferred from prefix
+                                     # "ollama/llama3.1:8b" for fully local
+api_key = ""                         # not needed for Ollama; env var OPENAI_API_KEY also accepted
 temperature = 0.1
 memory_turns = 5
 
@@ -564,6 +593,8 @@ langfuse_public_key = ""              # required when exporter = "langfuse"
 langfuse_secret_key = ""
 langfuse_host = "https://cloud.langfuse.com"
 ```
+
+All `api_key` fields can be left blank and set via environment variables instead (`OPENAI_API_KEY`, `COHERE_API_KEY`, etc.) — LiteLLM and the provider SDKs pick these up automatically. The toml fields take precedence when set.
 
 ---
 
@@ -695,24 +726,53 @@ Human expert spot-checks a 20% sample of LLM judge scores per eval run to catch 
 
 ---
 
+## Setup (Cold Start)
+
+For a user cloning the repo for the first time:
+
+```bash
+# 1. Install dependencies
+pip install qdrant-client[fastembed] litellm langchain-text-splitters
+
+# 2. Configure
+cp sommelier.toml.example sommelier.toml
+# edit sommelier.toml: set api_key or export OPENAI_API_KEY=...
+
+# 3. Clone the Apache Pinot docs
+git clone https://github.com/apache/pinot.git
+
+# 4. Run ingestion (first run indexes everything; subsequent runs are incremental)
+python -m sommelier ingest --docs-path ./pinot/website/docs --version 1.2
+
+# 5. Add to MCP client (e.g. Claude Desktop claude_desktop_config.json):
+# { "mcpServers": { "sommelier": { "command": "python", "args": ["-m", "sommelier"] } } }
+```
+
+Ingestion must complete before the MCP server can answer questions. A full first-run index of the Pinot docs takes a few minutes on CPU (FastEmbed, no GPU needed).
+
+---
+
 ## Next Steps (in order)
 
 1. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
 2. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
 3. Validate in a notebook: `pip install qdrant-client[fastembed] litellm langchain-text-splitters` → test local Qdrant + hybrid search + bge-base-en-v1.5 + BM25 + FastEmbed cross-encoder reranking end-to-end
-4. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
-5. Write `ingestion/chunker.py`: strip GitBook syntax → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter` (512 tokens, 50 overlap); propagate `h1`/`h2`/`h3` as metadata
-6. Write `ingestion/loader.py` + `ingestion/indexer.py`: read `.md` files from cloned Pinot docs repo → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID
-7. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates
-8. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`
-9. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming
-10. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
-11. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
-12. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
-13. Add `tracer.emit()` calls to `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
-14. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
-15. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
-16. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
+4. Set up Python package: `pyproject.toml` with dependencies, `sommelier/__init__.py`, CLI entry point (`python -m sommelier ingest / logs`)
+5. Write `vector_store/qdrant.py`: `get_client(config)` + `ensure_collection(client, config)`; used by indexer and retriever
+6. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
+7. Write `ingestion/chunker.py`: strip GitBook syntax → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter.from_tiktoken_encoder` (512 tokens, 50 overlap); propagate `h1`/`h2`/`h3` as metadata
+8. Write `ingestion/loader.py` + `ingestion/indexer.py`: walk `apache/pinot` docs → construct `source_url` → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID
+9. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates
+10. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`
+11. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming
+12. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
+13. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
+14. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
+15. Add `tracer.emit()` calls to `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
+16. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
+17. Write `README.md`: setup instructions (cold start), configuration reference, MCP client wiring
+18. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
+19. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
 
 ## Verification
 
