@@ -349,11 +349,9 @@ version = "latest"                   # metadata filter applied at retrieval time
 
 ## RAG Framework
 
-**Recommendation: LlamaIndex** (but raw SDKs are a strong alternative)
+**Decision: Raw SDKs** (`qdrant-client`, `fastembed`, `litellm`, `langchain-text-splitters`)
 
-- LlamaIndex has first-class Qdrant support (`QdrantVectorStore`), handles chunking pipelines, and is purpose-built for this use case. Less boilerplate than raw SDKs for the retrieval-augmented generation loop.
-- Raw SDKs (openai + qdrant-client directly) would show deeper RAG understanding in a portfolio context, but require more code. Worth revisiting once the pipeline design is clearer.
-- LangChain: fine, but heavier and less ergonomic for RAG-specific patterns.
+The pipeline is custom enough — hybrid search with RRF, two-stage reranking, query router, content-hash dedup — that LlamaIndex would add a dependency and abstraction layer without removing meaningful code. Every stage maps directly to a raw SDK call, and working around LlamaIndex's built-in abstractions would add complexity rather than reduce it.
 
 ---
 
