@@ -36,12 +36,9 @@ These three constraints together **rule out ChromaDB**. ChromaDB has no native h
 ```
 sommelier/
 ├── ingestion/
-│   ├── loader.py           # Load docs from cloned GitHub repo; GitHub API for issues/PRs/code
-│   ├── chunker.py          # GitBook pre-process → header-aware split → recursive split to ~512 tokens
-│   └── indexer.py          # Embed (dense + sparse) + delete stale + insert new into Qdrant
+│   └── ingest.py           # Load docs → clean GitBook → chunk → embed (dense + sparse) → delete stale + insert new into Qdrant
 ├── retrieval/
-│   ├── retriever.py        # Hybrid search: dense + sparse → RRF → top 20 candidates
-│   ├── reranker.py         # Cross-encoder reranking: top 20 → top 5 (FastEmbed or Cohere)
+│   ├── search.py           # Hybrid search (dense + sparse → RRF → top 20) → cross-encoder reranking → top rerank_top_k
 │   └── router.py           # V2: LLM query classifier → adjusts rerank_top_k per query type
 ├── inference/
 │   └── llm.py              # LiteLLM wrapper: loads prompts/system_prompt.md, builds user message, streams response
@@ -73,14 +70,12 @@ Project root:
 ```
 Pinot docs repo (cloned locally)
         ↓
-   loader.py       ← find and read raw .md files
-        ↓
-   chunker.py      ← clean GitBook syntax, split into chunks with metadata
-        ↓
-   indexer.py      ← embed (dense + sparse), delete stale, insert new
+   ingest.py       ← load .md files → clean GitBook → chunk → embed (dense + sparse) → delete stale + insert new
 ```
 
-**loader.py** walks the cloned Apache Pinot docs repo (`apache/pinot`, docs under `website/docs/`) and reads raw markdown files. Finds `.md` files, reads content, and constructs `source_url` by mapping the relative file path to the canonical GitBook URL:
+**ingest.py** is the single ingestion module. It owns the full pipeline from raw docs to Qdrant points:
+
+1. **Load** — walks `apache/pinot` docs under `website/docs/`, reads `.md` files, constructs `source_url` from the relative file path:
 
 ```python
 # file_path:   website/docs/basics/concepts/table.md
@@ -90,28 +85,13 @@ def to_source_url(file_path: str) -> str:
     return f"https://docs.pinot.apache.org/{path}"
 ```
 
-Each record emitted:
+2. **Chunk** — strips GitBook syntax, splits on markdown headers (`MarkdownHeaderTextSplitter`), recursively splits oversized sections (`RecursiveCharacterTextSplitter`, 512 tokens, 50 overlap). See the Chunking Strategy section for full detail. Section headers (`h1`/`h2`/`h3`) propagate as metadata on every chunk.
 
-```python
-{
-    "raw_text": "...",
-    "file_path": "website/docs/basics/concepts/table.md",
-    "source_url": "https://docs.pinot.apache.org/basics/concepts/table",
-    "pinot_version": "1.2",  # passed in via --version flag at ingest time
-}
-```
+3. **Embed: dense + sparse** — generates a dense vector (`bge-base-en-v1.5`, 768 dims via FastEmbed) and a sparse BM25 vector (`Qdrant/bm25` via FastEmbed) for each new chunk.
 
-GitHub API for issues/PRs/code is a V1.1 addition — V1 is docs only.
+4. **Delete stale + insert new** — per file: scroll existing point IDs, diff against new IDs, delete orphans, insert new chunks. See Incremental Update Logic for full detail.
 
-**chunker.py** takes each raw markdown record and produces a list of chunk payloads. See the Chunking Strategy section for full detail. In brief: strip GitBook syntax, split on markdown headers (`MarkdownHeaderTextSplitter`), then recursively split oversized sections (`RecursiveCharacterTextSplitter`, 512 tokens, 50 overlap). Section headers (`h1`/`h2`/`h3`) propagate as metadata on every chunk for source citations.
-
-**indexer.py** takes chunk payloads and writes them to Qdrant. Three responsibilities:
-
-1. **Embed: dense + sparse** — for each new chunk, generates a dense vector (`bge-base-en-v1.5`, 768 dims via FastEmbed) and a sparse BM25 vector (`Qdrant/bm25` via FastEmbed).
-2. **Delete stale** — per file: scroll existing point IDs, diff against new IDs, delete orphans. See Incremental Update Logic for full detail.
-3. **Insert new** — insert chunks whose content-hash point ID is not already in Qdrant.
-
-Ingestion is triggered manually (e.g. `python -m sommelier ingest --docs-path ./pinot-docs --version 1.2`). Subsequent runs skip unchanged chunks automatically.
+Ingestion is triggered manually (e.g. `python -m sommelier ingest --docs-path ./pinot/website/docs --version 1.2`). Subsequent runs skip unchanged chunks automatically. GitHub API for issues/PRs/code is a V1.1 addition — V1 is docs only.
 
 ---
 
@@ -214,23 +194,20 @@ There are no updates — only inserts and deletes. A modified chunk always produ
 ```
 User query
     ↓
-retriever.py    ← hybrid search (dense + sparse + RRF) → top 20 candidates
-    ↓
-reranker.py     ← cross-encoder reranking → top rerank_top_k chunks
+search.py       ← hybrid search (dense + sparse + RRF) → top 20 candidates → cross-encoder reranking → top rerank_top_k
     ↓
 LLM context
 ```
 
 **V2 — router.py** (deferred): an LLM query classifier that labels queries as `"specific"` or `"broad"` and doubles `rerank_top_k` for broad queries. Deferred because the added LLM call during inference adds latency and complexity before the base pipeline is validated.
 
-**retriever.py** executes hybrid search against Qdrant and returns the top `retrieval_top_k` candidates (default 20) in a single `query_points` call:
+**search.py** owns both retrieval stages:
 
 - **Dense search** — embeds the query with the configured dense model and retrieves top candidates by cosine similarity. Captures semantic meaning; good for paraphrased or conceptual queries.
 - **Sparse search** — encodes the query with BM25 via FastEmbed and retrieves top candidates by keyword overlap. Captures exact term matches — critical for Pinot's dense technical vocabulary (config keys, class names, port numbers).
 - **RRF fusion** — Reciprocal Rank Fusion merges the two ranked lists natively in Qdrant. Chunks that rank well in both lists rise to the top; chunks that appear in only one are demoted. No manual score normalization needed.
 - **Version filter** — if `pinot_version` is set, a `FieldCondition` filter restricts results to chunks tagged with that version.
-
-**reranker.py** narrows the 20 candidates to `final_top_k` using a cross-encoder, which scores each (query, chunk) pair jointly rather than independently — more accurate than embedding similarity alone. Two modes: FastEmbed cross-encoder (default, local, no API key) or Cohere Rerank (optional, higher quality, requires `COHERE_API_KEY`).
+- **Cross-encoder reranking** — narrows the 20 candidates to `rerank_top_k` by scoring each (query, chunk) pair jointly rather than independently — more accurate than embedding similarity alone. Two modes: FastEmbed cross-encoder (default, local, no API key) or Cohere Rerank (optional, higher quality, requires `COHERE_API_KEY`).
 
 The two-stage design (vector search → cross-encoder) exists because vector search is fast but imprecise, and cross-encoder reranking is precise but slow at scale. The 20→5 funnel gets the best of both: fast broad retrieval to prune the search space, then precise reranking on a small candidate set.
 
@@ -329,10 +306,9 @@ Both query and ingestion traces are written to the same JSON lines log (`event_t
 | Module | What to emit |
 |---|---|
 | `mcp_server.py` | `start_trace`, `flush` per request |
-| `retrieval/retriever.py` | `candidates` (source_url, rrf_score, snippet); if `debug_retrieval`: dense-only + sparse-only result sets |
-| `retrieval/reranker.py` | `reranked` (source_url, cross_encoder_score) |
+| `retrieval/search.py` | `candidates` (source_url, rrf_score, snippet); `reranked` (source_url, cross_encoder_score); if `debug_retrieval`: dense-only + sparse-only result sets |
 | `inference/llm.py` | `tokens`, `stage_latency_ms.llm`, `response` |
-| `ingestion/indexer.py` | `start_trace(event_type="ingestion")`, per-file inserted/deleted/skipped/errors, `flush` |
+| `ingestion/ingest.py` | `start_trace(event_type="ingestion")`, per-file inserted/deleted/skipped/errors, `flush` |
 
 #### Exporters
 
@@ -752,53 +728,46 @@ Ingestion must complete before the MCP server can answer questions. A full first
 
 ---
 
+## Completed Steps (in order)
+
+
 ## Next Steps (in order)
 
 ### Foundation
-1. Set up Python package: `pyproject.toml` with dependencies (managed via `uv`), `sommelier/__init__.py`, CLI entry point (`python -m sommelier ingest / logs`)
+1. Set up Python package: `pyproject.toml` with dependencies (managed via `uv`), `sommelier/__init__.py`, CLI entry point (`python -m sommelier ingest / query / logs`)
 2. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
 
 ### Ingestion Pipeline
 1. Write `vector_store/qdrant.py`: `get_client(config)` + `ensure_collection(client, config)`; used by indexer and retriever
 2. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
-3. Write `ingestion/chunker.py`: strip GitBook syntax → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter.from_tiktoken_encoder` (512 tokens, 50 overlap); propagate `h1`/`h2`/`h3` as metadata
-4. Write `ingestion/loader.py` + `ingestion/indexer.py`: walk `apache/pinot` docs → construct `source_url` → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID; emit per-file inserted/deleted/skipped/errors via `tracer.start_trace(event_type="ingestion")` + `tracer.flush()`
+3. Write `ingestion/ingest.py`: load `apache/pinot` docs → construct `source_url` → strip GitBook → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter.from_tiktoken_encoder` (512 tokens, 50 overlap) → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID; emit per-file inserted/deleted/skipped/errors via `tracer.start_trace(event_type="ingestion")` + `tracer.flush()`
 
 ### Retrieval Pipeline
-1. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates; emit candidates (source_url, rrf_score, snippet) to tracer
-2. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`; emit reranked results (source_url, cross_encoder_score) to tracer
-3. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
-4. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
-5. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming; emit tokens/latency/response to tracer
+1. Write `retrieval/search.py`: hybrid search (dense + sparse + RRF → top `retrieval_top_k`) → FastEmbed cross-encoder reranking (default) or Cohere Rerank (optional) → top `rerank_top_k`; emit candidates and reranked results to tracer
+2. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
+3. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
+4. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming; emit tokens/latency/response to tracer
+5. Test end-to-end via CLI: `python -m sommelier query "What is the default broker port?"` with Pinot docs already indexed; confirm the full pipeline (search → rerank → llm) returns a correct, cited answer before wiring into MCP server
 
 ### Observability
 1. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
 2. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
+3. Verify observability is working:
+   - After a query: confirm `sommelier_traces.jsonl` contains a full trace with all fields (candidates, reranked, stage_latency_ms, tokens, response)
+   - After the same query with `exporter = "langfuse"` and valid keys: confirm the same trace appears in Langfuse UI
+   - After an ingest run: confirm an `event_type: "ingestion"` entry appears in `sommelier_traces.jsonl` with correct inserted/deleted/skipped counts
+   - With `debug_retrieval = true`: confirm `from_dense`/`from_sparse` fields appear on candidates
+   - Run `python -m sommelier logs --review`, promote a query, confirm new entry scaffolded into `golden_set.json`
+   - Confirm end-to-end query latency stays under 3 seconds with full tracing enabled
 
 ### Evaluations
 1. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
-2. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
+2. Run `python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change; V1 is done when:
+   - Sommelier average score ≥ 2.5/3 across all 20 golden set questions
+   - Sommelier average beats plain Claude average (all three dimensions)
+   - Retrieval precision (expected sources hit) ≥ 80%
 
 ### Packaging
 1. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; add `tracer.start_trace()` + `tracer.flush()` per request
 2. Write `README.md`: setup instructions (cold start), configuration reference, MCP client wiring
 
-## Verification
-
-Run `python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change.
-
-**V1 exit criteria:**
-- Sommelier average score ≥ 2.5/3 across all 20 golden set questions
-- Sommelier average beats plain Claude average (all three dimensions)
-- Retrieval precision (expected sources hit) ≥ 80%
-
-The 5 sample questions from earlier planning are good seeds for the factual and comparison categories in the golden set.
-
-**Observability verification:**
-- After a query: confirm `sommelier_traces.jsonl` contains a full trace entry with all fields (candidates, reranked, stage_latency_ms, tokens, response)
-- After an ingest run: confirm an `event_type: "ingestion"` entry appears with correct inserted/deleted/skipped counts
-- With `debug_retrieval = true`: confirm `from_dense`/`from_sparse` fields appear on candidates
-- With `exporter = "langfuse"` and valid keys: confirm trace appears in Langfuse UI
-- Run `python -m sommelier logs --review`, promote a query, confirm new entry scaffolded into `golden_set.json`
-- Run `eval.py`: confirm retrieval precision is computed from `reranked[*].source_url` vs `expected_sources`
-- Confirm end-to-end query latency stays under 3 seconds with full tracing enabled
