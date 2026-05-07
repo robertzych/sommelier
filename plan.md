@@ -44,7 +44,7 @@ sommelier/
 │   ├── reranker.py         # Cross-encoder reranking: top 20 → top 5 (FastEmbed or Cohere)
 │   └── router.py           # LLM query classifier → adjusts rerank_top_k per query type
 ├── inference/
-│   └── llm.py              # LiteLLM wrapper: GPT-4o-mini (default) or Ollama llama3.1:8b (local)
+│   └── llm.py              # LiteLLM wrapper: loads prompts/system_prompt.md, builds user message, streams response
 ├── vector_store/
 │   └── qdrant.py           # Qdrant client abstraction (local or Docker)
 ├── embeddings/
@@ -57,6 +57,16 @@ sommelier/
 │   ├── golden_set.json     # Expert-written questions, expected sources, baseline scores
 │   └── eval.py             # Eval runner: queries Sommelier, LLM judge scoring, comparison report
 └── mcp_server.py           # MCP tool: search_pinot(query, pinot_version=None)
+```
+
+```
+Project root:
+├── sommelier/              ← Python package
+├── prompts/
+│   └── system_prompt.md    # Active system prompt; git commit hash logged in traces + eval
+├── plan.md
+├── mcp_server.py
+└── sommelier.toml
 ```
 
 ### Ingestion Pipeline
@@ -316,6 +326,106 @@ Lists recent query traces (newest first) with query text, retrieved source URLs,
 #### Retrieval Precision
 
 Retrieval precision (expected sources hit rate) is computed at eval-time only — not in the hot path. `eval.py` runs golden set queries through the live pipeline, captures the trace, and compares `reranked[*].source_url` against `expected_sources` per question. This feeds the "Retrieval precision (expected sources hit)" row in the eval report.
+
+### System Prompt Design
+
+The system prompt lives in `prompts/system_prompt.md`, tracked in git. Its commit hash is logged in every query trace (`prompt_version` field) and in `eval.py` output — this ties eval score changes to specific prompt edits.
+
+```
+# eval output (with prompt version)
+Prompt version: abc1234 (2026-05-07)
+Sommelier avg: 2.6/3  (+0.5 vs b38d8c8)
+Retrieval precision: 87%
+```
+
+#### System Prompt (`prompts/system_prompt.md`)
+
+```
+You are Sommelier, an expert assistant for Apache Pinot. You help users
+configure, deploy, query, and troubleshoot Apache Pinot based on the
+official documentation.
+
+## Scope
+Answer only Apache Pinot questions. If asked about something outside
+Apache Pinot, say: "I'm focused on Apache Pinot — for [topic], a
+general-purpose assistant would serve you better."
+
+## Using Retrieved Documentation
+You will be given numbered documentation chunks as context. Base your
+answers strictly on this context.
+
+- Never fabricate configuration keys, class names, port numbers, or
+  parameter values. Only cite values that appear verbatim in the
+  retrieved documentation.
+- If the retrieved context does not fully cover the question, give
+  whatever partial answer the context supports, then add: "Note: my
+  documentation coverage for this question was limited — verify this
+  against the full Apache Pinot docs."
+- If no retrieved context is relevant, say: "I couldn't find
+  documentation covering this. Try docs.pinot.apache.org or the Apache
+  Pinot community Slack."
+- Do not use general knowledge about Apache Pinot when it contradicts
+  or extends beyond the retrieved context.
+
+## Version Specificity
+If the retrieved documentation is from a different Pinot version than
+the user specified (shown in the question), note the discrepancy clearly.
+
+## Citations
+Cite sources inline using the reference numbers from the context
+(e.g., "The default broker port is 8099 [1]."). End every response with
+a **Sources** section listing each cited number, its section path, and
+its URL.
+
+## Response Format
+- Use fenced code blocks (with language tag) for all configuration
+  snippets, YAML, JSON, SQL, and CLI commands.
+- Use markdown headers (##) when the answer has multiple distinct parts
+  (e.g., Configuration, Example, Caveats). Use flat prose for simple
+  answers.
+- Do not use step-by-step list structure unless the question explicitly
+  asks for a procedure.
+- Answer as thoroughly as the retrieved context supports — do not truncate.
+
+## Tone
+Be direct and precise. No filler phrases. Write as a knowledgeable
+colleague who knows Apache Pinot deeply.
+```
+
+#### User Message Format
+
+The user message (assembled by `mcp_server.py` before the LLM call) combines the reranked chunks, the active Pinot version, and the user's query:
+
+```
+Context from Apache Pinot documentation:
+
+[1] docs/config/broker.md — Concepts > Broker > Configuration
+URL: https://docs.pinot.apache.org/.../broker-config
+The default broker port is 8099. To change it, set broker.port in broker.conf...
+
+[2] docs/deployment/quickstart.md — Getting Started > Quickstart
+URL: https://docs.pinot.apache.org/.../quickstart
+...
+
+Pinot version: 1.2
+Question: What is the default broker port?
+```
+
+Each numbered entry includes: relative file path, breadcrumb section path (`h1 > h2 > h3` from chunk metadata), canonical `source_url`, and chunk text. The `Pinot version` line reflects the version filter applied at retrieval time (or "latest" if no filter).
+
+#### Prompt Version in Traces and Evals
+
+`llm.py` reads `prompts/system_prompt.md` at startup and computes its git commit hash. The hash is stored on the `Tracer` singleton and included in every query trace:
+
+```json
+{
+  "event_type": "query",
+  "prompt_version": "abc1234",
+  ...
+}
+```
+
+`eval.py` reads the hash from the current trace and includes it in the eval report header. Comparing eval runs across prompt versions is a matter of comparing hashes.
 
 ---
 
@@ -590,21 +700,23 @@ Human expert spot-checks a 20% sample of LLM judge scores per eval run to catch 
 
 ## Next Steps (in order)
 
-1. Validate in a notebook: `pip install qdrant-client[fastembed] litellm langchain-text-splitters` → test local Qdrant + hybrid search + bge-base-en-v1.5 + BM25 + FastEmbed cross-encoder reranking end-to-end
-2. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
-3. Write `ingestion/chunker.py`: strip GitBook syntax → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter` (512 tokens, 50 overlap); propagate `h1`/`h2`/`h3` as metadata
-4. Write `ingestion/loader.py` + `ingestion/indexer.py`: read `.md` files from cloned Pinot docs repo → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID
-5. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates
-6. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`
-7. Write `retrieval/router.py`: LLM query classifier → "specific" | "broad" → adjusts `rerank_top_k`
-8. Write `inference/llm.py`: LiteLLM wrapper with conversation memory (`memory_turns`), markdown+citations response format, streaming
-9. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
-10. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`
-11. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
-12. Add `tracer.emit()` calls to `router.py`, `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
-13. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
-14. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
-15. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
+1. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
+2. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
+3. Validate in a notebook: `pip install qdrant-client[fastembed] litellm langchain-text-splitters` → test local Qdrant + hybrid search + bge-base-en-v1.5 + BM25 + FastEmbed cross-encoder reranking end-to-end
+4. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
+5. Write `ingestion/chunker.py`: strip GitBook syntax → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter` (512 tokens, 50 overlap); propagate `h1`/`h2`/`h3` as metadata
+6. Write `ingestion/loader.py` + `ingestion/indexer.py`: read `.md` files from cloned Pinot docs repo → chunk → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID
+7. Write `retrieval/retriever.py`: hybrid search (dense + sparse + RRF), returns top `retrieval_top_k` candidates
+8. Write `retrieval/reranker.py`: FastEmbed cross-encoder (default) or Cohere Rerank (optional); narrows to `rerank_top_k`
+9. Write `retrieval/router.py`: LLM query classifier → "specific" | "broad" → adjusts `rerank_top_k`
+10. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming
+11. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
+12. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`; stores prompt_version (git commit hash of system_prompt.md)
+13. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
+14. Add `tracer.emit()` calls to `router.py`, `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
+15. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
+16. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
+17. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
 
 ## Verification
 
@@ -625,3 +737,12 @@ The 5 sample questions from earlier planning are good seeds for the factual and 
 - Run `python -m sommelier logs --review`, promote a query, confirm new entry scaffolded into `golden_set.json`
 - Run `eval.py`: confirm retrieval precision is computed from `reranked[*].source_url` vs `expected_sources`
 - Confirm end-to-end query latency stays under 3 seconds with full tracing enabled
+
+**System prompt verification:**
+- Query traces include `prompt_version` field (git commit hash of `prompts/system_prompt.md`)
+- `eval.py` report header shows prompt version and delta vs. prior version
+- A query with no relevant retrieved context returns the expected can't-answer response
+- A query with partial context returns a partial answer with the "coverage was limited" note
+- Config keys and parameter values in responses match verbatim text from retrieved chunks
+- Every response ends with a **Sources** section with inline citation numbers and clickable URLs
+- Non-Pinot questions receive the scope-redirect response
