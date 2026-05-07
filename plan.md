@@ -49,6 +49,10 @@ sommelier/
 │   └── qdrant.py           # Qdrant client abstraction (local or Docker)
 ├── embeddings/
 │   └── provider.py         # FastEmbed (default) or OpenAI; swappable via config
+├── observability/
+│   ├── tracer.py           # Tracer singleton; each pipeline stage emits events to it
+│   ├── exporters.py        # LocalJSONExporter (JSON lines + rotation) + LangfuseExporter
+│   └── cli.py              # `python -m sommelier logs --review` log review + golden set promotion
 ├── evals/
 │   ├── golden_set.json     # Expert-written questions, expected sources, baseline scores
 │   └── eval.py             # Eval runner: queries Sommelier, LLM judge scoring, comparison report
@@ -213,6 +217,106 @@ candidates = client.query_points(
 reranked = reranker.rerank(query, candidates, top_k=final_top_k)
 ```
 
+### Observability
+
+The primary failure risk is wrong chunks retrieved — the system returns a plausible but incorrect answer. Observability is developer-facing only; no trace data is surfaced in MCP responses.
+
+#### Architecture
+
+A central `Tracer` singleton lives in `observability/tracer.py`. Each pipeline stage imports it and emits events. `mcp_server.py` opens a trace at the start of each request and flushes it at the end. Ingestion does the same per file.
+
+```python
+# any pipeline stage
+from sommelier.observability import tracer
+tracer.emit("retrieval", {"candidates": [...], "scores": [...]})
+
+# mcp_server.py
+tracer.start_trace(trace_id, event_type="query", query=query)
+# ... pipeline runs ...
+tracer.flush()  # writes completed trace via configured exporter
+```
+
+#### Query Trace Format
+
+```json
+{
+  "event_type": "query",
+  "trace_id": "<uuid>",
+  "ts": "2026-05-07T10:23:01Z",
+  "query": "what is the default broker port?",
+  "pinot_version": "1.2",
+  "router_label": "specific",
+  "final_top_k": 5,
+  "candidates": [
+    {
+      "source_url": "https://docs.pinot.apache.org/...",
+      "file_path": "docs/config/broker.md",
+      "rrf_score": 0.82,
+      "snippet": "The default Pinot broker port is 8099...",
+      "from_dense": true,
+      "from_sparse": false
+    }
+  ],
+  "reranked": [
+    {"source_url": "...", "cross_encoder_score": 0.91}
+  ],
+  "stage_latency_ms": {
+    "router": 120, "retrieval": 85, "reranker": 310, "llm": 725
+  },
+  "total_latency_ms": 1240,
+  "tokens": {"input": 2100, "output": 180},
+  "response": "The default Pinot broker port is 8099..."
+}
+```
+
+`from_dense`/`from_sparse` on candidates are only populated when `observability.debug_retrieval = true`. Enabling this runs 3 Qdrant queries per request (dense-only + sparse-only + hybrid) instead of 1 to expose the BM25/dense breakdown.
+
+#### Ingestion Trace Format
+
+```json
+{
+  "event_type": "ingestion",
+  "trace_id": "<uuid>",
+  "ts": "2026-05-07T09:00:00Z",
+  "file_path": "docs/basics/concepts/table.md",
+  "pinot_version": "1.2",
+  "inserted": 12,
+  "deleted": 3,
+  "skipped": 45,
+  "errors": []
+}
+```
+
+Both query and ingestion traces are written to the same JSON lines log (`event_type` distinguishes them).
+
+#### Emit Points
+
+| Module | What to emit |
+|---|---|
+| `mcp_server.py` | `start_trace`, `flush` per request |
+| `retrieval/router.py` | `router_label`, `final_top_k` |
+| `retrieval/retriever.py` | `candidates` (source_url, rrf_score, snippet); if `debug_retrieval`: dense-only + sparse-only result sets |
+| `retrieval/reranker.py` | `reranked` (source_url, cross_encoder_score) |
+| `inference/llm.py` | `tokens`, `stage_latency_ms.llm`, `response` |
+| `ingestion/indexer.py` | `start_trace(event_type="ingestion")`, per-file inserted/deleted/skipped/errors, `flush` |
+
+#### Exporters
+
+- **LocalJSONExporter** (default): appends completed trace as a JSON line to `log_path`. Rotates when file exceeds `max_log_mb`; keeps last `log_rotations_kept` files.
+- **LangfuseExporter** (optional): enabled via `exporter = "langfuse"` in config. Sends traces to Langfuse in real time. Local log is always written regardless.
+
+#### Log Review and Golden Set Promotion
+
+```
+python -m sommelier logs --review
+```
+
+Lists recent query traces (newest first) with query text, retrieved source URLs, router label, and total latency. Interactive: `p` promotes the query to `golden_set.json` (scaffolds a new entry with `expected_sources` pre-filled from `reranked[*].source_url`), `n` skips, `q` quits.
+
+#### Retrieval Precision
+
+Retrieval precision (expected sources hit rate) is computed at eval-time only — not in the hot path. `eval.py` runs golden set queries through the live pipeline, captures the trace, and compares `reranked[*].source_url` against `expected_sources` per question. This feeds the "Retrieval precision (expected sources hit)" row in the eval report.
+
 ---
 
 ## Chunking Strategy
@@ -343,6 +447,17 @@ docker_url = "http://localhost:6333"
 
 [pinot]
 version = "latest"                   # metadata filter applied at retrieval time
+
+[observability]
+log_path = "./sommelier_traces.jsonl"
+exporter = "local"                    # local | langfuse
+max_log_mb = 100                      # rotate log when it exceeds this size
+log_rotations_kept = 3                # number of rotated files to keep
+debug_retrieval = false               # BM25 vs dense delta; enables 3x Qdrant calls per query
+
+langfuse_public_key = ""              # required when exporter = "langfuse"
+langfuse_secret_key = ""
+langfuse_host = "https://cloud.langfuse.com"
 ```
 
 ---
@@ -484,8 +599,12 @@ Human expert spot-checks a 20% sample of LLM judge scores per eval run to catch 
 7. Write `retrieval/router.py`: LLM query classifier → "specific" | "broad" → adjusts `rerank_top_k`
 8. Write `inference/llm.py`: LiteLLM wrapper with conversation memory (`memory_turns`), markdown+citations response format, streaming
 9. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool
-10. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
-11. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
+10. Write `observability/tracer.py`: Tracer singleton with `start_trace`, `emit`, `flush`
+11. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
+12. Add `tracer.emit()` calls to `router.py`, `retriever.py`, `reranker.py`, `llm.py`, `indexer.py`; add `tracer.start_trace()` + `tracer.flush()` to `mcp_server.py`
+13. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
+14. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
+15. Run `eval.py` once Sommelier is wired up; target avg ≥ 2.5/3 and beat plain Claude average before V1 is done
 
 ## Verification
 
@@ -497,3 +616,12 @@ Run `python evals/eval.py --golden-set evals/golden_set.json --judge claude` aft
 - Retrieval precision (expected sources hit) ≥ 80%
 
 The 5 sample questions from earlier planning are good seeds for the factual and comparison categories in the golden set.
+
+**Observability verification:**
+- After a query: confirm `sommelier_traces.jsonl` contains a full trace entry with all fields (candidates, reranked, stage_latency_ms, tokens, response)
+- After an ingest run: confirm an `event_type: "ingestion"` entry appears with correct inserted/deleted/skipped counts
+- With `debug_retrieval = true`: confirm `from_dense`/`from_sparse` fields appear on candidates
+- With `exporter = "langfuse"` and valid keys: confirm trace appears in Langfuse UI
+- Run `python -m sommelier logs --review`, promote a query, confirm new entry scaffolded into `golden_set.json`
+- Run `eval.py`: confirm retrieval precision is computed from `reranked[*].source_url` vs `expected_sources`
+- Confirm end-to-end query latency stays under 3 seconds with full tracing enabled
