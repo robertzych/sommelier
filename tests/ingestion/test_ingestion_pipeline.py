@@ -174,12 +174,24 @@ class TestIndexFile:
         _run_index(client, dense, sparse)
         records, _ = client.scroll(PINOT_DOCS_COLLECTION, with_payload=True, limit=10)
         assert len(records) > 0
-        payload = records[0].payload
-        for field in ("text", "file_path", "doc_type", "pinot_version", "content_hash"):
-            assert field in payload, f"missing field: {field}"
-        assert payload["file_path"] == "concepts/table.md"
-        assert payload["pinot_version"] == "1.2"
-        assert payload["doc_type"] == "documentation"
+        for record in records:
+            for field in ("text", "file_path", "doc_type", "pinot_version", "content_hash", "h1", "h2", "h3"):
+                assert field in record.payload, f"missing field: {field}"
+            assert record.payload["file_path"] == "concepts/table.md"
+            assert record.payload["pinot_version"] == "1.2"
+            assert record.payload["doc_type"] == "documentation"
+        table_types_chunks = [r.payload for r in records if r.payload.get("h3") == "Table Types"]
+        assert len(table_types_chunks) == 1
+        assert table_types_chunks[0]["h1"] == "Concepts"
+        assert table_types_chunks[0]["h2"] == "Table"
+        schema_chunks = [r.payload for r in records if r.payload.get("h3") == "Schema"]
+        assert len(schema_chunks) == 1
+        assert schema_chunks[0]["h1"] == "Concepts"
+        assert schema_chunks[0]["h2"] == "Table"
+        ingestion_chunks = [r.payload for r in records if r.payload.get("h2") == "Ingestion"]
+        assert len(ingestion_chunks) == 1
+        assert ingestion_chunks[0]["h1"] == "Concepts"
+        assert ingestion_chunks[0]["h3"] == ""
 
     def test_deletes_all_chunks_when_file_becomes_empty(self, collection_context):
         """Re-indexing an empty file removes all previously indexed chunks for that file."""
