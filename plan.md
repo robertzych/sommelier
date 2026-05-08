@@ -154,8 +154,7 @@ dense_model = "BAAI/bge-base-en-v1.5"
 ```python
 payload = {
     "text":          chunk_text,
-    "source_url":    "https://docs.pinot.apache.org/...",  # canonical URL for citation
-    "file_path":     "docs/basics/concepts/table.md",      # relative path in repo
+    "file_path":     "configuration-reference/table.md",   # relative path in pinot-docs repo root
     "doc_type":      "documentation",                      # or "github_issue", "java_code"
     "pinot_version": "1.2",                                # stored as metadata, default=latest
     "h1":            "Concepts",                           # section headers from splitter
@@ -163,6 +162,7 @@ payload = {
     "h3":            "Table Types",
     "content_hash":  sha256(chunk_text),                   # used as point ID for dedup
 }
+# Note: source_url was removed — GitBook URL mapping is unreliable without site settings access.
 ```
 
 ### Incremental Update Logic
@@ -492,8 +492,7 @@ Section titles (`h1`, `h2`, `h3`) are stored as metadata on every chunk — used
 ```python
 payload = {
     "text":          chunk_text,
-    "source_url":    "https://docs.pinot.apache.org/...",  # canonical URL for citation
-    "file_path":     "docs/basics/concepts/table.md",      # relative path in repo
+    "file_path":     "configuration-reference/table.md",   # relative path in pinot-docs repo root
     "doc_type":      "documentation",
     "pinot_version": "1.2",
     "h1":            "Concepts",             # section headers from splitter
@@ -750,8 +749,6 @@ Ingestion must complete before the MCP server can answer questions. A full first
 
 ## Next Steps (in order)
 
-### Ingestion Pipeline
-1. Write `ingestion/ingest.py`: load `apache/pinot` docs → construct `source_url` → strip GitBook → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter.from_tiktoken_encoder` (512 tokens, 50 overlap) → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID; emit per-file inserted/deleted/skipped/errors via `tracer.start_trace(event_type="ingestion")` + `tracer.flush()`
 
 ### Retrieval Pipeline
 1. Write `retrieval/search.py`: hybrid search (dense + sparse + RRF → top `retrieval_top_k`) → FastEmbed cross-encoder reranking (default) or Cohere Rerank (optional) → top `rerank_top_k`; emit candidates and reranked results to tracer
@@ -792,4 +789,5 @@ Ingestion must complete before the MCP server can answer questions. A full first
 ### Ingestion Pipeline
 1. Write `vector_store/qdrant_store.py`: `get_client(config)` + `ensure_collection(client, config, collection_name)`; `PINOT_DOCS_COLLECTION` constant for callers. Dense dims looked up from `config.embeddings.model_dims[config.collections[collection_name].dense_model]` — adding new models or collections requires only a config change. Covered by 5 integration tests in `tests/vector_store/test_qdrant_store.py` using a real file-system-backed Qdrant client.
 2. Write `embeddings/provider.py`: two protocols (`DenseEmbeddingProvider`, `SparseEmbeddingProvider`), three implementations (`FastEmbedProvider`, `OpenAIProvider`, `BM25Provider`), and factory functions `get_dense_provider(config)` + `get_sparse_provider()`. Sparse is always BM25/FastEmbed regardless of dense provider. OpenAI tests gated on `SOMMELIER_TEST_OPENAI_API_KEY`. 11 integration tests in `tests/embeddings/test_embedding_provider.py`.
+3. Write `ingestion/ingest.py`: `clean_gitbook`, `derive_point_id`, `index_file`, and `ingest`. `docs_path` is the root of the cloned pinot-docs repo; `file_path` in each chunk payload is relative to that root. `source_url` removed — GitBook URL mapping is unreliable without site settings access. 12 tests in `tests/ingestion/test_ingestion_pipeline.py` covering pure functions and full insert/skip/replace/delete lifecycle.
 

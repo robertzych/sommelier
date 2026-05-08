@@ -1,0 +1,178 @@
+import hashlib
+import pathlib
+import re
+import uuid
+
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+from qdrant_client import QdrantClient
+from qdrant_client.models import FieldCondition, Filter, MatchValue, PointIdsList, PointStruct
+
+from embeddings.provider import DenseEmbeddingProvider, SparseEmbeddingProvider
+from observability.tracer import tracer
+from vector_store.qdrant_store import PINOT_DOCS_COLLECTION
+
+_HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
+_GITBOOK_TAG = re.compile(r"\{%.*?%\}", re.DOTALL)
+_EXCESS_BLANKS = re.compile(r"\n{3,}")
+
+
+def clean_gitbook(text: str) -> str:
+    """Strip GitBook template tags and collapse excess blank lines."""
+    text = _GITBOOK_TAG.sub("", text)
+    text = _EXCESS_BLANKS.sub("\n\n", text)
+    return text.strip()
+
+
+def derive_point_id(chunk_text: str) -> uuid.UUID:
+    """Return a deterministic UUID derived from the SHA-256 hash of chunk_text."""
+    digest = hashlib.sha256(chunk_text.encode()).digest()[:16]
+    return uuid.UUID(bytes=digest)
+
+
+def _chunk_markdown(raw_markdown: str):
+    """Clean and split a markdown document into header-aware, size-bounded chunks."""
+    md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS)
+    header_splits = md_splitter.split_text(clean_gitbook(raw_markdown))
+    char_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=512, chunk_overlap=50
+    )
+    return char_splitter.split_documents(header_splits)
+
+
+def index_file(
+    client: QdrantClient,
+    collection_name: str,
+    file_path: str,
+    raw_markdown: str,
+    dense_provider: DenseEmbeddingProvider,
+    sparse_provider: SparseEmbeddingProvider,
+    pinot_version: str,
+) -> dict:
+    """Incrementally index one markdown file into Qdrant.
+
+    Chunks the document, diffs against existing points by content-hash ID,
+    deletes stale points, and inserts only new or changed chunks.
+
+    Returns a dict with keys: inserted, deleted, skipped, errors.
+    """
+    chunks = _chunk_markdown(raw_markdown)
+    chunk_texts = [c.page_content for c in chunks]
+
+    new_points = {derive_point_id(t): (t, c) for t, c in zip(chunk_texts, chunks)}
+
+    # collect existing point IDs for this file (paginate to handle large files)
+    old_ids: set[uuid.UUID] = set()
+    offset = None
+    while True:
+        records, offset = client.scroll(
+            collection_name,
+            scroll_filter=Filter(
+                must=[FieldCondition(key="file_path", match=MatchValue(value=file_path))]
+            ),
+            with_payload=False,
+            limit=1000,
+            offset=offset,
+        )
+        for r in records:
+            old_ids.add(uuid.UUID(str(r.id)))
+        if offset is None:
+            break
+
+    # delete stale points (removed or modified chunks)
+    stale_ids = old_ids - set(new_points)
+    if stale_ids:
+        client.delete(
+            collection_name,
+            points_selector=PointIdsList(points=[str(sid) for sid in stale_ids]),
+        )
+
+    # embed and insert only chunks not already in the collection
+    to_insert = {pid: val for pid, val in new_points.items() if pid not in old_ids}
+    if to_insert:
+        pids = list(to_insert)
+        texts = [to_insert[pid][0] for pid in pids]
+        docs = [to_insert[pid][1] for pid in pids]
+        dense_vecs = dense_provider.embed(texts)
+        sparse_vecs = sparse_provider.embed(texts)
+
+        points = [
+            PointStruct(
+                id=str(pid),
+                vector={"dense": dense_vec, "sparse": sparse_vec},
+                payload={
+                    "text": text,
+                    "file_path": file_path,
+                    "doc_type": "documentation",
+                    "pinot_version": pinot_version,
+                    "h1": doc.metadata.get("h1", ""),
+                    "h2": doc.metadata.get("h2", ""),
+                    "h3": doc.metadata.get("h3", ""),
+                    "content_hash": hashlib.sha256(text.encode()).hexdigest(),
+                },
+            )
+            for pid, text, doc, dense_vec, sparse_vec in zip(
+                pids, texts, docs, dense_vecs, sparse_vecs
+            )
+        ]
+        client.upsert(collection_name, points=points)
+
+    return {
+        "inserted": len(to_insert),
+        "deleted": len(stale_ids),
+        "skipped": len(new_points) - len(to_insert),
+        "errors": [],
+    }
+
+
+def ingest(
+    docs_path: str,
+    config,
+    pinot_version: str,
+    collection_name: str = PINOT_DOCS_COLLECTION,
+) -> None:
+    """Walk docs_path recursively, indexing every .md file into Qdrant.
+
+    docs_path is the root of a cloned pinot-docs repo. The file_path stored
+    in each chunk's payload is relative to that root (e.g. basics/concepts/table.md).
+
+    Emits one ingestion trace per file via the tracer singleton.
+    """
+    from embeddings.provider import get_dense_provider, get_sparse_provider
+    from vector_store.qdrant_store import ensure_collection, get_client
+
+    client = get_client(config)
+    ensure_collection(client, config, collection_name)
+    dense_provider = get_dense_provider(config)
+    sparse_provider = get_sparse_provider()
+
+    docs_root = pathlib.Path(docs_path).resolve()
+
+    for md_file in sorted(docs_root.rglob("*.md")):
+        file_path = str(md_file.relative_to(docs_root))
+        raw_markdown = md_file.read_text(encoding="utf-8")
+
+        trace_id = str(uuid.uuid4())
+        tracer.start_trace(
+            trace_id,
+            event_type="ingestion",
+            file_path=file_path,
+            pinot_version=pinot_version,
+        )
+        try:
+            stats = index_file(
+                client=client,
+                collection_name=collection_name,
+                file_path=file_path,
+                raw_markdown=raw_markdown,
+                dense_provider=dense_provider,
+                sparse_provider=sparse_provider,
+                pinot_version=pinot_version,
+            )
+            tracer.emit("ingestion", stats)
+        except Exception as e:
+            tracer.emit(
+                "ingestion",
+                {"inserted": 0, "deleted": 0, "skipped": 0, "errors": [str(e)]},
+            )
+        finally:
+            tracer.flush()
