@@ -95,38 +95,58 @@ Ingestion is triggered manually (e.g. `python -m sommelier ingest --docs-path ./
 
 ---
 
-### vector_store/qdrant.py
+### vector_store/qdrant_store.py
 
 Thin wrapper that reads `[vector_store]` config from `sommelier.toml` and returns a configured `QdrantClient`. Also owns collection creation (called once at startup if the collection doesn't exist).
 
+`PINOT_DOCS_COLLECTION` is a module-level constant callers use instead of a raw string to prevent accidental duplicate/misnamed collections. `ensure_collection` is parameterized by `collection_name` to support multiple collections with different models.
+
 ```python
+PINOT_DOCS_COLLECTION = "pinot_docs"
+
 def get_client(config) -> QdrantClient:
     if config.vector_store.backend == "qdrant_local":
         return QdrantClient(path=config.vector_store.path)
-    else:
-        return QdrantClient(url=config.vector_store.docker_url)
+    return QdrantClient(url=config.vector_store.docker_url)
 
-def ensure_collection(client: QdrantClient, config):
-    if not client.collection_exists("pinot_docs"):
-        client.create_collection(...)  # see schema below
+def ensure_collection(client: QdrantClient, config, collection_name: str) -> None:
+    if client.collection_exists(collection_name):
+        return
+    dense_model = config.collections[collection_name].dense_model
+    dense_dim = config.embeddings.model_dims[dense_model]
+    client.create_collection(...)  # see schema below
 ```
 
 Used by `indexer.py` (write) and `retriever.py` (read). All other modules go through this abstraction rather than instantiating `QdrantClient` directly.
 
 ### Qdrant Collection Schema
 
+Dense vector dimensions are looked up from `config.embeddings.model_dims[dense_model]`, where `dense_model` comes from `config.collections[collection_name].dense_model`. This means adding a new model or collection only requires a config change — no code change in `qdrant_store.py`.
+
 ```python
 client.create_collection(
-    collection_name="pinot_docs",
+    collection_name=collection_name,
     vectors_config={
-        "dense": VectorParams(size=768, distance=Distance.COSINE),
-        # 768 = bge-base-en-v1.5 (default); 384 = all-MiniLM-L6-v2 (fast mode); 1536 = text-embedding-3-small
+        "dense": VectorParams(size=dense_dim, distance=Distance.COSINE),
+        # dense_dim from config.embeddings.model_dims[config.collections[collection_name].dense_model]
         # changing dense_model requires dropping and recreating this collection
     },
     sparse_vectors_config={
         "sparse": SparseVectorParams()  # BM25 via FastEmbed Qdrant/bm25
     }
 )
+```
+
+Relevant config sections:
+
+```toml
+[embeddings.model_dims]
+"BAAI/bge-base-en-v1.5" = 768
+"all-MiniLM-L6-v2" = 384
+"text-embedding-3-small" = 1536
+
+[collections.pinot_docs]
+dense_model = "BAAI/bge-base-en-v1.5"
 ```
 
 ### Chunk Payload (metadata)
@@ -731,8 +751,7 @@ Ingestion must complete before the MCP server can answer questions. A full first
 ## Next Steps (in order)
 
 ### Ingestion Pipeline
-1. Write `vector_store/qdrant.py`: `get_client(config)` + `ensure_collection(client, config)`; used by indexer and retriever
-2. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
+1. Write `embeddings/provider.py`: FastEmbed wrapper (bge-base default, all-MiniLM fast mode) + OpenAI provider; reads config from `sommelier.toml`
 3. Write `ingestion/ingest.py`: load `apache/pinot` docs → construct `source_url` → strip GitBook → `MarkdownHeaderTextSplitter` → `RecursiveCharacterTextSplitter.from_tiktoken_encoder` (512 tokens, 50 overlap) → embed (dense + sparse) → per file: scroll existing IDs, delete stale IDs, insert new chunks by content-hash point ID; emit per-file inserted/deleted/skipped/errors via `tracer.start_trace(event_type="ingestion")` + `tracer.flush()`
 
 ### Retrieval Pipeline
@@ -770,4 +789,7 @@ Ingestion must complete before the MCP server can answer questions. A full first
 ### Foundation
 1. Set up Python package: `pyproject.toml` with dependencies (managed via `uv`), src layout (`src/ingestion/`, `src/retrieval/`, etc.), CLI entry point (`sommelier ingest / query / logs` via `[project.scripts]`). Uses `setuptools.build_meta` backend; `onnxruntime<1.21.0` pinned for macOS x86_64 compatibility.
 2. Write `observability/tracer.py`: `Tracer` class with `start_trace(trace_id, event_type, **kwargs)`, `emit(stage, data)`, `flush()`; `Exporter` Protocol for later use by exporters.py; `prompt_version` computed from `git log -- prompts/system_prompt.md` at init (returns `"unknown"` until that file is committed); module-level `tracer` singleton.
+
+### Ingestion Pipeline
+1. Write `vector_store/qdrant_store.py`: `get_client(config)` + `ensure_collection(client, config, collection_name)`; `PINOT_DOCS_COLLECTION` constant for callers. Dense dims looked up from `config.embeddings.model_dims[config.collections[collection_name].dense_model]` — adding new models or collections requires only a config change. Covered by 5 integration tests in `tests/vector_store/test_qdrant_store.py` using a real file-system-backed Qdrant client.
 
