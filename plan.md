@@ -753,8 +753,7 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Retrieval Pipeline
-1. Write `retrieval/search.py`: hybrid search (dense + sparse + RRF → top `retrieval_top_k`) → FastEmbed cross-encoder reranking (default) or Cohere Rerank (optional) → top `rerank_top_k`; emit candidates and reranked results to tracer
-2. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
+1. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
 3. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
 4. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming; emit tokens/latency/response to tracer
 5. Test end-to-end via CLI: `python -m sommelier query "What is the default broker port?"` with Pinot docs already indexed; confirm the full pipeline (search → rerank → llm) returns a correct, cited answer
@@ -798,4 +797,7 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 1. Write `vector_store/qdrant_store.py`: `get_client(config)` + `ensure_collection(client, config, collection_name)`; `PINOT_DOCS_COLLECTION` constant for callers. Dense dims looked up from `config.embeddings.model_dims[config.collections[collection_name].dense_model]` — adding new models or collections requires only a config change. Covered by 5 integration tests in `tests/vector_store/test_qdrant_store.py` using a real file-system-backed Qdrant client.
 2. Write `embeddings/provider.py`: two protocols (`DenseEmbeddingProvider`, `SparseEmbeddingProvider`), three implementations (`FastEmbedProvider`, `OpenAIProvider`, `BM25Provider`), and factory functions `get_dense_provider(config)` + `get_sparse_provider()`. Sparse is always BM25/FastEmbed regardless of dense provider. OpenAI tests gated on `SOMMELIER_TEST_OPENAI_API_KEY`. 11 integration tests in `tests/embeddings/test_embedding_provider.py`.
 3. Write `ingestion/ingest.py`: `clean_gitbook`, `derive_point_id`, `index_file`, and `ingest`. `docs_path` is the root of the cloned pinot-docs repo; `file_path` in each chunk payload is relative to that root. `source_url` removed — GitBook URL mapping is unreliable without site settings access. 12 tests in `tests/ingestion/test_ingestion_pipeline.py` covering pure functions and full insert/skip/replace/delete lifecycle.
+
+### Retrieval Pipeline
+1. Write `retrieval/search.py`: `Reranker` Protocol, `FastEmbedReranker` (via `fastembed.rerank.cross_encoder`), `CohereReranker` (optional, gated on `SOMMELIER_TEST_COHERE_API_KEY`), `get_reranker(config)` factory, and `search()` (hybrid dense+sparse+RRF → `retrieval_top_k` candidates → cross-encoder reranking → `rerank_top_k`). Version filter applied in each `Prefetch` (not top-level `query_filter`, which is a no-op in local Qdrant mode with FusionQuery). Debug mode runs 3 queries and populates `from_dense`/`from_sparse` flags. Emits candidates, reranked results, and stage latencies to tracer. 15 tests in `tests/retrieval/test_search.py`; Cohere tests gated on `SOMMELIER_TEST_COHERE_API_KEY`.
 
