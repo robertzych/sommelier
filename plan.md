@@ -753,9 +753,7 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Retrieval Pipeline
-1. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
-3. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
-4. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming; emit tokens/latency/response to tracer
+1. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming; emit tokens/latency/response to tracer
 5. Test end-to-end via CLI: `python -m sommelier query "What is the default broker port?"` with Pinot docs already indexed; confirm the full pipeline (search → rerank → llm) returns a correct, cited answer
 6. Implement `sommelier chat` REPL: interactive loop that calls the full query pipeline, maintains an in-process conversation history list (last `memory_turns` turns) passed to `llm.py` on each turn, and emits each turn (query + response) as a `"chat_turn"` trace event; confirm multi-turn follow-up questions work correctly (e.g. "what about the server config?" resolves correctly given prior context)
 
@@ -800,4 +798,5 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ### Retrieval Pipeline
 1. Write `retrieval/search.py`: `Reranker` Protocol, `FastEmbedReranker` (via `fastembed.rerank.cross_encoder`), `CohereReranker` (optional, gated on `SOMMELIER_TEST_COHERE_API_KEY`), `get_reranker(config)` factory, and `search()` (hybrid dense+sparse+RRF → `retrieval_top_k` candidates → cross-encoder reranking → `rerank_top_k`). Version filter applied in each `Prefetch` (not top-level `query_filter`, which is a no-op in local Qdrant mode with FusionQuery). Debug mode runs 3 queries and populates `from_dense`/`from_sparse` flags. Emits candidates, reranked results, and stage latencies to tracer. 15 tests in `tests/retrieval/test_search.py`; Cohere tests gated on `SOMMELIER_TEST_COHERE_API_KEY`.
+2. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design. Validated manually via `gpt-4o-mini`: out-of-scope deflection, no-context response, inline `[N]` citations with Sources section, partial-context coverage note, conceptual answers — all correct. URLs must be included in the context block to avoid hallucination in Sources; the production user message format includes them.
 
