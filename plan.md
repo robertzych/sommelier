@@ -739,11 +739,13 @@ git clone https://github.com/apache/pinot.git
 # 4. Run ingestion (first run indexes everything; subsequent runs are incremental)
 python -m sommelier ingest --docs-path ./pinot/website/docs --version 1.2
 
-# 5. Add to MCP client (e.g. Claude Desktop claude_desktop_config.json):
-# { "mcpServers": { "sommelier": { "command": "python", "args": ["-m", "sommelier"] } } }
+# 5. Query interactively (multi-turn REPL with conversation memory):
+sommelier chat
+
+# MCP wiring (Claude Desktop, Claude Code) is a V1.1 integration — see V1.1 Integrations in Next Steps.
 ```
 
-Ingestion must complete before the MCP server can answer questions. A full first-run index of the Pinot docs takes a few minutes on CPU (FastEmbed, no GPU needed).
+Ingestion must complete before `sommelier query` or `sommelier chat` can answer questions. A full first-run index of the Pinot docs takes a few minutes on CPU (FastEmbed, no GPU needed).
 
 ---
 
@@ -755,7 +757,8 @@ Ingestion must complete before the MCP server can answer questions. A full first
 2. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design above
 3. Validate prompt behavior manually: run 3–5 representative queries through the LLM (no retrieval yet); confirm tone, citation format, and knowledge-gap handling match design
 4. Write `inference/llm.py`: loads `prompts/system_prompt.md`, builds user message (numbered context + version + query), LiteLLM call with conversation memory (`memory_turns`), streaming; emit tokens/latency/response to tracer
-5. Test end-to-end via CLI: `python -m sommelier query "What is the default broker port?"` with Pinot docs already indexed; confirm the full pipeline (search → rerank → llm) returns a correct, cited answer before wiring into MCP server
+5. Test end-to-end via CLI: `python -m sommelier query "What is the default broker port?"` with Pinot docs already indexed; confirm the full pipeline (search → rerank → llm) returns a correct, cited answer
+6. Implement `sommelier chat` REPL: interactive loop that calls the full query pipeline, maintains an in-process conversation history list (last `memory_turns` turns) passed to `llm.py` on each turn, and emits each turn (query + response) as a `"chat_turn"` trace event; confirm multi-turn follow-up questions work correctly (e.g. "what about the server config?" resolves correctly given prior context)
 
 ### Observability
 1. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
@@ -775,9 +778,14 @@ Ingestion must complete before the MCP server can answer questions. A full first
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval precision (expected sources hit) ≥ 80%
 
-### Packaging
-1. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; add `tracer.start_trace()` + `tracer.flush()` per request
-2. Write `README.md`: setup instructions (cold start), configuration reference, MCP client wiring
+### V1 Packaging
+1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview
+
+### V1.1 Integrations
+1. Publish to PyPI: `uv publish`; verify `uv tool install sommelier` works end-to-end on a clean environment
+2. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; internally calls the full query pipeline (retrieval + inference via `llm.py`); returns the finished LLM answer as the tool result; add `tracer.start_trace()` + `tracer.flush()` per request; the MCP client (Claude) echoes the finished answer — no second LLM generation needed
+3. Write `.claude/commands/pinot.md`: Claude Code slash command that calls `sommelier query "$1"` via Bash; multi-turn follow-ups are handled by Claude's context window, not by `sommelier`'s own memory
+4. Update `README.md`: add PyPI install instructions, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
 
 
 ## Completed Steps (in order)
