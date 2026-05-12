@@ -52,7 +52,8 @@ sommelier/
 │   └── cli.py              # `python -m sommelier logs --review` log review + golden set promotion
 └── evals/
     ├── golden_set.json     # Expert-written questions, expected sources, baseline scores
-    └── eval.py             # Eval runner: queries Sommelier, LLM judge scoring, comparison report
+    ├── metrics.py          # Pure metric functions: hit_rate, recall, mrr, full_recall_rate at both retrieval stages
+    └── eval.py             # Eval runner: retrieval-only mode + full (retrieval + LLM judge) mode
 ```
 
 ```
@@ -281,7 +282,6 @@ tracer.flush()  # writes completed trace via configured exporter
   "pinot_version": "1.2",
   "candidates": [
     {
-      "source_url": "https://docs.pinot.apache.org/...",
       "file_path": "docs/config/broker.md",
       "rrf_score": 0.82,
       "snippet": "The default Pinot broker port is 8099...",
@@ -290,7 +290,7 @@ tracer.flush()  # writes completed trace via configured exporter
     }
   ],
   "reranked": [
-    {"source_url": "...", "cross_encoder_score": 0.91}
+    {"file_path": "docs/config/broker.md", "cross_encoder_score": 0.91}
   ],
   "stage_latency_ms": {
     "retrieval": 85, "reranker": 310, "llm": 725
@@ -326,7 +326,7 @@ Both query and ingestion traces are written to the same JSON lines log (`event_t
 | Module | What to emit |
 |---|---|
 | `mcp_server.py` | `start_trace`, `flush` per request |
-| `retrieval/search.py` | `candidates` (source_url, rrf_score, snippet); `reranked` (source_url, cross_encoder_score); if `debug_retrieval`: dense-only + sparse-only result sets |
+| `retrieval/search.py` | `candidates` (file_path, rrf_score, snippet); `reranked` (file_path, cross_encoder_score); if `debug_retrieval`: dense-only + sparse-only result sets |
 | `inference/llm.py` | `tokens`, `stage_latency_ms.llm`, `response` |
 | `ingestion/ingest.py` | `start_trace(event_type="ingestion")`, per-file inserted/deleted/skipped/errors, `flush` |
 
@@ -341,11 +341,22 @@ Both query and ingestion traces are written to the same JSON lines log (`event_t
 python -m sommelier logs --review
 ```
 
-Lists recent query traces (newest first) with query text, retrieved source URLs, router label, and total latency. Interactive: `p` promotes the query to `golden_set.json` (scaffolds a new entry with `expected_sources` pre-filled from `reranked[*].source_url`), `n` skips, `q` quits.
+Lists recent query traces (newest first) with query text, retrieved file paths, and total latency. Interactive: `p` promotes the query to `golden_set.json` (scaffolds a new entry with `expected_sources` pre-filled from `reranked[*].file_path`), `n` skips, `q` quits.
 
-#### Retrieval Precision
+#### Retrieval Metrics
 
-Retrieval precision (expected sources hit rate) is computed at eval-time only — not in the hot path. `eval.py` runs golden set queries through the live pipeline, captures the trace, and compares `reranked[*].source_url` against `expected_sources` per question. This feeds the "Retrieval precision (expected sources hit)" row in the eval report.
+Retrieval metrics are computed at eval-time only — not in the hot path. `eval.py` runs golden set queries through the live pipeline, captures `candidates` (top `retrieval_top_k`, post-RRF) and `reranked` (top `rerank_top_k`, post-cross-encoder) from the trace, and computes four metrics at each stage by comparing `file_path` against `expected_sources` per question:
+
+| Metric | Definition | Rule |
+|---|---|---|
+| **Hit Rate@k** | Fraction of questions where ≥1 expected source appears in top-k | any-of |
+| **Recall@k** | Mean fraction of expected sources found in top-k | per-question average |
+| **MRR@k** | Mean reciprocal rank of the first expected source hit | per-question average |
+| **Full Recall rate** | Fraction of questions where all expected sources appear in top-k | all-of |
+
+All four are computed at both stages: `@candidates` (top `retrieval_top_k`) and `@reranked` (top `rerank_top_k`). The gap between stages reveals whether the reranker is helping or dropping relevant sources.
+
+Pure metric functions live in `evals/metrics.py`; `eval.py` calls them. After each eval run, an `"eval_result"` event is appended to the trace log with per-question scores, keyed by `trace_id` and `question_id` — making results searchable without an interactive UI.
 
 ### System Prompt Design
 
@@ -666,21 +677,40 @@ Total: 0–3. A score of 2+ is passing. Summaries reported as averages across th
 
 ### Eval Runner (`evals/eval.py`)
 
-```
+Two modes:
+
+```bash
+# Fast: retrieval metrics only, no LLM calls (~seconds)
+python evals/eval.py --golden-set evals/golden_set.json --retrieval-only
+
+# Full: retrieval + LLM generation + judge scoring
 python evals/eval.py --golden-set evals/golden_set.json --judge claude
 ```
 
-Output:
+Full run output:
 ```
 Prompt version: abc1234 (2026-05-07)
 
-ID     Question (truncated)                    Sommelier  Claude  Docs AI
-q001   How do I configure an upsert table?    3/3        1/3     2/3
-q002   What is the default broker port?       3/3        2/3     3/3
+Retrieval (post-reranker, top-5):
+  Hit Rate:        90%   (18/20)
+  Recall:          85%   avg
+  MRR:             0.78  avg
+  Full Recall:     80%   (16/20 all expected sources found)
+
+Retrieval (candidates, top-20):
+  Hit Rate:        95%   (19/20)
+  Recall:          92%   avg
+
+ID     Question (truncated)              H@5  R@5    MRR   Sommelier  Claude  Docs AI
+q001   How do I configure upsert?        ✓    100%   1.00  3/3        1/3     2/3
+q002   What is the default broker port?  ✓    100%   0.67  3/3        2/3     3/3
 ...
-Avg                                            2.7/3      1.5/3   2.2/3
-Retrieval precision (expected sources hit)    87%        n/a     n/a
+Avg LLM scores:                                            2.7/3      1.5/3   2.2/3
 ```
+
+Retrieval-only output shows the same two-block retrieval summary without the per-question LLM score columns.
+
+`eval.py` appends one `"eval_result"` event per question to `sommelier_traces.jsonl` after each run, containing the trace_id, question_id, per-question retrieval metrics, and (if full run) LLM judge scores.
 
 ### LLM Judge Prompt (for automation / regression detection)
 
@@ -764,11 +794,13 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
    - Confirm end-to-end query latency stays under 3 seconds with full tracing enabled
 
 ### Evaluations
-1. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources; manually score Claude + docs.pinot.apache.org AI responses
-2. Run `python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change; V1 is done when:
+1. Write `evals/metrics.py`: pure functions — `hit_rate(retrieved: list[str], expected: list[str]) -> float`, `recall(retrieved, expected) -> float`, `mrr(retrieved, expected) -> float`, `full_recall_rate(questions: list[dict]) -> float`; all operate on `file_path` lists; tests in `tests/evals/test_metrics.py`
+2. Write `evals/eval.py`: `--retrieval-only` mode (calls search.py, computes metrics via metrics.py, prints two-block retrieval summary — post-reranker and candidates — appends `"eval_result"` events to trace log); default full mode adds LiteLLM judge scoring (JUDGE_PROMPT below) and per-question H@5/R@5/MRR columns in the LLM score table
+3. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources (`file_path` strings matching chunk payload paths); manually score Claude + docs.pinot.apache.org AI responses
+4. Run `python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change; V1 is done when:
    - Sommelier average score ≥ 2.5/3 across all 20 golden set questions
    - Sommelier average beats plain Claude average (all three dimensions)
-   - Retrieval precision (expected sources hit) ≥ 80%
+   - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
 
 ### Citation Renumbering
 1. Post-process completed LLM responses to renumber inline citations sequentially. After all tokens are collected, scan the response text for `[N]` references, assign new sequential numbers `[1]`, `[2]`, `[3]`... in first-appearance order, rewrite both the inline citations and the Sources section entries to use the new numbers. Apply in both `cmd_query` and `cmd_chat`.
