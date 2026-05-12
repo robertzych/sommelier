@@ -31,8 +31,7 @@ the user specified (shown in the question), note the discrepancy clearly.
 ## Citations
 Cite sources inline using the reference numbers from the context
 (e.g., "The default broker port is 8099 [1]."). End every response with
-a **Sources** section listing each cited number, its section path, and
-its URL.
+a **Sources** section listing each cited number and its section path.
 
 ## Response Format
 - Use fenced code blocks (with language tag) for all configuration
