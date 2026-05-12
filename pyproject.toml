@@ -12,10 +12,10 @@ dependencies = [
     "tiktoken>=0.7.0",
     "tomli>=2.0.0; python_version < '3.11'",
     "mcp>=1.0.0",
+    "langfuse>=4.0.0",
 ]
 
 [project.optional-dependencies]
-langfuse = ["langfuse>=2.0.0"]
 cohere = ["cohere>=5.0.0"]
 
 [project.scripts]

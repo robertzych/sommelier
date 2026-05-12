@@ -783,7 +783,6 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Observability
-1. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
 2. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
 3. Verify observability is working:
    - After a query: confirm `sommelier_traces.jsonl` contains a full trace with all fields (candidates, reranked, stage_latency_ms, tokens, response)
@@ -832,4 +831,7 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 3. Write `inference/llm.py`: `build_user_message` (numbered chunks + breadcrumb headers + version + query), `complete` generator (LiteLLM streaming with conversation memory, merges `stage_latency_ms.llm` into existing retrieval latency dict). `getattr(chunk, "usage", None)` required for LiteLLM streaming chunks. 7 tests in `tests/inference/test_llm.py`; integration test gated on `SOMMELIER_TEST_OPENAI_API_KEY`.
 4. Test end-to-end via CLI: `sommelier query "What is the default broker port?"` — full pipeline returned correct answer with `[1]` citation. Implemented `load_config` (TOML → nested SimpleNamespace, keeping `model_dims` and `collections` as dicts), `cmd_ingest`, and `cmd_query` in `cli.py`. Updated `prompts/system_prompt.md` to remove URL from Sources (source_url was removed from payloads; model fabricated URLs without it).
 5. Implement `sommelier chat` REPL: interactive loop with full query pipeline, in-process conversation history capped at `memory_turns * 2`, `"chat_turn"` trace per turn. Fixed query echo in piped/non-TTY mode (`sys.stdin.isatty()` guard). Updated `prompts/system_prompt.md` Citations section to preserve original context reference numbers, list all cited sources in ascending order, and never skip a citation. Multi-turn follow-up confirmed: turn 2 correctly referenced broker port from turn 1 context. Tests in `tests/test_cli.py` (`TestCmdChatHistoryManagement`).
+
+### Observability
+1. Write `observability/exporters.py`: `LocalJSONExporter` (JSON lines + size-based rotation), `LangfuseExporter` (Langfuse v4 API via `start_observation`), and `get_exporters(config)` factory. `langfuse>=4.0.0` added to main dependencies. Wired into `cli.py` via `_setup_tracer(config)` helper called in `cmd_ingest`, `cmd_query`, and `cmd_chat`. Extracted `_init_pipeline(config)` helper to remove repeated pipeline setup. `cli.py` test updated to mock `_setup_tracer` and `_init_pipeline`. 12 tests in `tests/observability/test_exporters.py`; Langfuse integration tests gated on `SOMMELIER_TEST_LANGFUSE_PUBLIC_KEY` + `SOMMELIER_TEST_LANGFUSE_SECRET_KEY`.
 

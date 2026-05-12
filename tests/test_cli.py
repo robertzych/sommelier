@@ -34,11 +34,8 @@ class TestCmdChatHistoryManagement:
 
         patches = [
             mock.patch("cli.load_config", return_value=config),
-            mock.patch("vector_store.qdrant_store.get_client"),
-            mock.patch("vector_store.qdrant_store.ensure_collection"),
-            mock.patch("embeddings.provider.get_dense_provider"),
-            mock.patch("embeddings.provider.get_sparse_provider"),
-            mock.patch("retrieval.search.get_reranker"),
+            mock.patch("cli._setup_tracer"),
+            mock.patch("cli._init_pipeline", return_value=(None, None, None, None)),
             mock.patch("retrieval.search.search", return_value=[]),
             mock.patch("inference.llm.complete", side_effect=fake_complete),
             mock.patch("observability.tracer.tracer.start_trace"),

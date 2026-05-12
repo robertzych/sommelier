@@ -30,23 +30,49 @@ def load_config(path: str = "sommelier.toml") -> types.SimpleNamespace:
     )
 
 
+def _setup_tracer(config) -> None:
+    """Register configured exporters on the tracer singleton."""
+    from observability.exporters import get_exporters
+
+    for exporter in get_exporters(config):
+        tracer.register_exporter(exporter)
+
+
+def _init_pipeline(config):
+    """Initialize and return (client, dense_provider, sparse_provider, reranker)."""
+    from embeddings.provider import get_dense_provider, get_sparse_provider
+    from retrieval.search import get_reranker
+    from vector_store.qdrant_store import PINOT_DOCS_COLLECTION, ensure_collection, get_client
+
+    client = get_client(config)
+    ensure_collection(client, config, PINOT_DOCS_COLLECTION)
+    return (
+        client,
+        get_dense_provider(config),
+        get_sparse_provider(),
+        get_reranker(config),
+    )
+
+
 def cmd_ingest(args):
     """Index all .md files in docs_path into Qdrant."""
     from ingestion.ingest import ingest
 
     config = load_config()
+    _setup_tracer(config)
     ingest(docs_path=args.docs_path, config=config, pinot_version=args.version)
 
 
 def cmd_query(args):
     """Run a single query through the full search → rerank → llm pipeline."""
-    from embeddings.provider import get_dense_provider, get_sparse_provider
     from inference.llm import complete
-    from retrieval.search import get_reranker, search
-    from vector_store.qdrant_store import PINOT_DOCS_COLLECTION, ensure_collection, get_client
+    from retrieval.search import search
+    from vector_store.qdrant_store import PINOT_DOCS_COLLECTION
 
     config = load_config()
+    _setup_tracer(config)
     pinot_version = None if args.version == "latest" else args.version
+    client, dense, sparse, reranker = _init_pipeline(config)
 
     tracer.start_trace(
         str(uuid.uuid4()),
@@ -54,12 +80,6 @@ def cmd_query(args):
         query=args.question,
         pinot_version=args.version,
     )
-
-    client = get_client(config)
-    ensure_collection(client, config, PINOT_DOCS_COLLECTION)
-    dense = get_dense_provider(config)
-    sparse = get_sparse_provider()
-    reranker = get_reranker(config)
 
     chunks = search(
         query=args.question,
@@ -81,20 +101,15 @@ def cmd_query(args):
 
 def cmd_chat(args):
     """Interactive multi-turn REPL with conversation memory."""
-    from embeddings.provider import get_dense_provider, get_sparse_provider
     from inference.llm import complete
-    from retrieval.search import get_reranker, search
-    from vector_store.qdrant_store import PINOT_DOCS_COLLECTION, ensure_collection, get_client
+    from retrieval.search import search
+    from vector_store.qdrant_store import PINOT_DOCS_COLLECTION
 
     config = load_config()
+    _setup_tracer(config)
     pinot_version = None if args.version == "latest" else args.version
     memory_turns = config.inference.memory_turns
-
-    client = get_client(config)
-    ensure_collection(client, config, PINOT_DOCS_COLLECTION)
-    dense = get_dense_provider(config)
-    sparse = get_sparse_provider()
-    reranker = get_reranker(config)
+    client, dense, sparse, reranker = _init_pipeline(config)
 
     history: list[dict] = []
     turn = 0
