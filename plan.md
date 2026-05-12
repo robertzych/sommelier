@@ -752,9 +752,6 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 ## Next Steps (in order)
 
 
-### Retrieval Pipeline
-6. Implement `sommelier chat` REPL: interactive loop that calls the full query pipeline, maintains an in-process conversation history list (last `memory_turns` turns) passed to `llm.py` on each turn, and emits each turn (query + response) as a `"chat_turn"` trace event; confirm multi-turn follow-up questions work correctly (e.g. "what about the server config?" resolves correctly given prior context)
-
 ### Observability
 1. Write `observability/exporters.py`: LocalJSONExporter (JSON lines + size-based rotation) + LangfuseExporter (config-toggled, off by default)
 2. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
@@ -772,6 +769,9 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
    - Sommelier average score ≥ 2.5/3 across all 20 golden set questions
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval precision (expected sources hit) ≥ 80%
+
+### Citation Renumbering
+1. Post-process completed LLM responses to renumber inline citations sequentially. After all tokens are collected, scan the response text for `[N]` references, assign new sequential numbers `[1]`, `[2]`, `[3]`... in first-appearance order, rewrite both the inline citations and the Sources section entries to use the new numbers. Apply in both `cmd_query` and `cmd_chat`.
 
 ### V1 Packaging
 1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview
@@ -799,4 +799,5 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 2. Write `prompts/system_prompt.md`: initial system prompt per the System Prompt Design. Validated manually via `gpt-4o-mini`: out-of-scope deflection, no-context response, inline `[N]` citations with Sources section, partial-context coverage note, conceptual answers — all correct. URLs must be included in the context block to avoid hallucination in Sources; the production user message format includes them.
 3. Write `inference/llm.py`: `build_user_message` (numbered chunks + breadcrumb headers + version + query), `complete` generator (LiteLLM streaming with conversation memory, merges `stage_latency_ms.llm` into existing retrieval latency dict). `getattr(chunk, "usage", None)` required for LiteLLM streaming chunks. 7 tests in `tests/inference/test_llm.py`; integration test gated on `SOMMELIER_TEST_OPENAI_API_KEY`.
 4. Test end-to-end via CLI: `sommelier query "What is the default broker port?"` — full pipeline returned correct answer with `[1]` citation. Implemented `load_config` (TOML → nested SimpleNamespace, keeping `model_dims` and `collections` as dicts), `cmd_ingest`, and `cmd_query` in `cli.py`. Updated `prompts/system_prompt.md` to remove URL from Sources (source_url was removed from payloads; model fabricated URLs without it).
+5. Implement `sommelier chat` REPL: interactive loop with full query pipeline, in-process conversation history capped at `memory_turns * 2`, `"chat_turn"` trace per turn. Fixed query echo in piped/non-TTY mode (`sys.stdin.isatty()` guard). Updated `prompts/system_prompt.md` Citations section to preserve original context reference numbers, list all cited sources in ascending order, and never skip a citation. Multi-turn follow-up confirmed: turn 2 correctly referenced broker port from turn 1 context. Tests in `tests/test_cli.py` (`TestCmdChatHistoryManagement`).
 

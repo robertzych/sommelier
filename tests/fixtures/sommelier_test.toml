@@ -1,0 +1,39 @@
+[embeddings]
+provider = "fastembed"
+dense_model = "BAAI/bge-base-en-v1.5"
+openai_api_key = ""
+
+[embeddings.model_dims]
+"BAAI/bge-base-en-v1.5" = 768
+
+[inference]
+model = "gpt-4o-mini"
+api_key = ""
+temperature = 0.1
+memory_turns = 2
+
+[retrieval]
+retrieval_top_k = 20
+rerank_top_k = 5
+reranker = "fastembed"
+fastembed_reranker_model = "Xenova/ms-marco-MiniLM-L-6-v2"
+cohere_api_key = ""
+cohere_reranker_model = "rerank-multilingual-v3.0"
+
+[vector_store]
+backend = "qdrant_local"
+path = "./qdrant_storage"
+docker_url = "http://localhost:6333"
+
+[pinot]
+version = "latest"
+
+[observability]
+log_path = "./sommelier_traces.jsonl"
+exporter = "local"
+max_log_mb = 100
+log_rotations_kept = 3
+debug_retrieval = false
+
+[collections.pinot_docs]
+dense_model = "BAAI/bge-base-en-v1.5"
