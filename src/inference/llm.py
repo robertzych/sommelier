@@ -86,6 +86,7 @@ def complete(
             "llm",
             {
                 "tokens": usage,
+                "model": config.inference.model,
                 "stage_latency_ms": stage_latency,
                 "response": "".join(response_parts),
             },

@@ -784,15 +784,6 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 ## Next Steps (in order)
 
 
-### Observability
-1. Verify observability is working:
-   - After a query: confirm `sommelier_traces.jsonl` contains a full trace with all fields (candidates, reranked, stage_latency_ms, tokens, response)
-   - After the same query with `exporter = "langfuse"` and valid keys: confirm the same trace appears in Langfuse UI
-   - After an ingest run: confirm an `event_type: "ingestion"` entry appears in `sommelier_traces.jsonl` with correct inserted/deleted/skipped counts
-   - With `debug_retrieval = true`: confirm `from_dense`/`from_sparse` fields appear on candidates
-   - Run `python -m sommelier logs --review`, promote a query, confirm new entry scaffolded into `golden_set.json`
-   - Confirm end-to-end query latency stays under 3 seconds with full tracing enabled
-
 ### Evaluations
 1. Write `evals/metrics.py`: pure functions — `hit_rate(retrieved: list[str], expected: list[str]) -> float`, `recall(retrieved, expected) -> float`, `mrr(retrieved, expected) -> float`, `full_recall_rate(questions: list[dict]) -> float`; all operate on `file_path` lists; tests in `tests/evals/test_metrics.py`
 2. Write `evals/eval.py`: `--retrieval-only` mode (calls search.py, computes metrics via metrics.py, prints two-block retrieval summary — post-reranker and candidates — appends `"eval_result"` events to trace log); default full mode adds LiteLLM judge scoring (JUDGE_PROMPT below) and per-question H@5/R@5/MRR columns in the LLM score table
@@ -801,6 +792,14 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
    - Sommelier average score ≥ 2.5/3 across all 20 golden set questions
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
+
+### Latency Optimization
+Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s) against a 3s target. The two bottlenecks are the fastembed cross-encoder ONNX model and the OpenAI API round-trip.
+
+1. Profile reranker: measure `reranker.rerank()` in isolation with 20 candidates to separate ONNX model load time from inference time. If load dominates, the MCP server use case (persistent process) is already fast; document this and lower the latency target for single-shot `sommelier query` invocations to 5s.
+2. Reduce retrieval candidates: lower `retrieval_top_k` from 20 to 10 and re-run the eval to check whether hit rate drops. If not, reranker inference time roughly halves.
+3. Evaluate Cohere Rerank latency: run a sample query with `reranker = "cohere"` and compare end-to-end latency vs fastembed. Cohere is a single HTTP call rather than local ONNX inference; may be faster depending on network conditions.
+4. LLM streaming UX: `total_latency_ms` measures time to last token, but the user sees the first token much sooner (~500–700ms). Confirm TTFT (time-to-first-token) is acceptable and document it separately from total latency in traces.
 
 ### Citation Renumbering
 1. Post-process completed LLM responses to renumber inline citations sequentially. After all tokens are collected, scan the response text for `[N]` references, assign new sequential numbers `[1]`, `[2]`, `[3]`... in first-appearance order, rewrite both the inline citations and the Sources section entries to use the new numbers. Apply in both `cmd_query` and `cmd_chat`.
@@ -836,4 +835,5 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ### Observability
 1. Write `observability/exporters.py`: `LocalJSONExporter` (JSON lines + size-based rotation), `LangfuseExporter` (Langfuse v4 API via `start_observation`), and `get_exporters(config)` factory. `langfuse>=4.0.0` added to main dependencies. Wired into `cli.py` via `_setup_tracer(config)` helper called in `cmd_ingest`, `cmd_query`, and `cmd_chat`. Extracted `_init_pipeline(config)` helper to remove repeated pipeline setup. `cli.py` test updated to mock `_setup_tracer` and `_init_pipeline`. 12 tests in `tests/observability/test_exporters.py`; Langfuse integration tests gated on `SOMMELIER_TEST_LANGFUSE_PUBLIC_KEY` + `SOMMELIER_TEST_LANGFUSE_SECRET_KEY`.
+2. Verify observability: confirmed query traces contain all fields (candidates with snippets, reranked with cross_encoder_score and snippet, stage_latency_ms, tokens, model, response) in `sommelier_traces.jsonl`; Langfuse UI shows correct latency and cost; ingestion traces appear per-file with correct inserted/deleted/skipped counts; `debug_retrieval=true` populates `from_dense`/`from_sparse` on candidates. `logs --review` deferred to V1.1 (requires `observability/cli.py`). Observed end-to-end latency ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s) — latency optimization tracked as a separate Next Step.
 

@@ -341,6 +341,7 @@ class TestSearch:
         reranked = tracer._trace["reranked"][0]
         assert "file_path" in reranked
         assert "cross_encoder_score" in reranked
+        assert "snippet" in reranked
 
         tracer._trace = {}  # clean up without flushing
 

@@ -43,14 +43,25 @@ class LangfuseExporter:
 
     def export(self, trace: dict[str, Any]) -> None:
         """Send a single trace to Langfuse."""
+        import time
         from langfuse.types import TraceContext
 
         event_type = trace.get("event_type", "unknown")
         trace_id = trace.get("trace_id", "")
+        total_latency_ms = trace.get("total_latency_ms", 0)
 
         if event_type in ("query", "chat_turn"):
             inp = {"query": trace.get("query", "")}
             out = {"response": trace.get("response", "")}
+            tokens = trace.get("tokens", {})
+            kwargs: dict[str, Any] = {
+                "as_type": "generation",
+                "model": trace.get("model", ""),
+                "usage_details": {
+                    "input": tokens.get("input", 0),
+                    "output": tokens.get("output", 0),
+                },
+            }
         elif event_type == "ingestion":
             inp = {"file_path": trace.get("file_path", "")}
             out = {
@@ -58,21 +69,25 @@ class LangfuseExporter:
                 "deleted": trace.get("deleted", 0),
                 "skipped": trace.get("skipped", 0),
             }
+            kwargs = {"as_type": "span"}
         else:
             inp = {}
             out = {}
+            kwargs = {"as_type": "span"}
 
         # Langfuse v4 requires 32-char hex trace IDs; derive one from our UUID seed.
         langfuse_trace_id = Langfuse.create_trace_id(seed=trace_id)
         span = self._client.start_observation(
             trace_context=TraceContext(trace_id=langfuse_trace_id),
             name=event_type,
-            as_type="span",
             input=inp,
             output=out,
             metadata=trace,
+            **kwargs,
         )
-        span.end()
+        # Pass end_time as now + total_latency_ms (ns) so Langfuse shows the real latency.
+        end_ns = int((time.time() + total_latency_ms / 1000) * 1e9)
+        span.end(end_time=end_ns)
         self._client.flush()
 
 

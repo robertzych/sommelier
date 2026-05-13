@@ -126,6 +126,7 @@ class TestComplete:
         assert all(isinstance(t, str) for t in tokens)
         assert tracer._trace["tokens"]["input"] > 0
         assert tracer._trace["tokens"]["output"] > 0
+        assert "model" in tracer._trace
         assert tracer._trace["response"] == "".join(tokens)
         latencies = tracer._trace["stage_latency_ms"]
         assert latencies["retrieval"] == 42

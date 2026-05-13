@@ -154,7 +154,11 @@ def _emit_retrieval_trace(
     ]
 
     reranked_records = [
-        {"file_path": point.payload.get("file_path", ""), "cross_encoder_score": score}
+        {
+            "file_path": point.payload.get("file_path", ""),
+            "cross_encoder_score": score,
+            "snippet": point.payload.get("text", "")[:200],
+        }
         for point, score in reranked_with_scores
     ]
 
