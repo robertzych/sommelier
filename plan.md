@@ -734,8 +734,10 @@ Human expert spot-checks a 20% sample of LLM judge scores per eval run to catch 
 
 ### Build Process
 
-1. Write 20 questions following the phase 1 distribution (8/5/4/3)
-2. For each question, tag `expected_sources` (the doc file + section that contains the answer)
+Source-first: choose expected sources before writing questions to ensure deliberate coverage across doc areas rather than clustering around whatever comes to mind.
+
+1. Select ~20 source files spanning key areas: ingestion, schema, querying, configuration, operations, performance tuning
+2. For each source file, write 1–2 questions it directly answers, following the 8/5/4/3 query type distribution
 3. Query plain Claude for each question; paste answers into `golden_set.json`; score manually
 4. Query docs.pinot.apache.org AI manually for each question; paste answers; score manually
 5. Once Sommelier is built: run `eval.py` to get Sommelier scores automatically via LLM judge
@@ -783,8 +785,7 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Observability
-2. Write `observability/cli.py`: `python -m sommelier logs --review` — interactive log review with golden set promotion
-3. Verify observability is working:
+1. Verify observability is working:
    - After a query: confirm `sommelier_traces.jsonl` contains a full trace with all fields (candidates, reranked, stage_latency_ms, tokens, response)
    - After the same query with `exporter = "langfuse"` and valid keys: confirm the same trace appears in Langfuse UI
    - After an ingest run: confirm an `event_type: "ingestion"` entry appears in `sommelier_traces.jsonl` with correct inserted/deleted/skipped counts
@@ -795,7 +796,7 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 ### Evaluations
 1. Write `evals/metrics.py`: pure functions — `hit_rate(retrieved: list[str], expected: list[str]) -> float`, `recall(retrieved, expected) -> float`, `mrr(retrieved, expected) -> float`, `full_recall_rate(questions: list[dict]) -> float`; all operate on `file_path` lists; tests in `tests/evals/test_metrics.py`
 2. Write `evals/eval.py`: `--retrieval-only` mode (calls search.py, computes metrics via metrics.py, prints two-block retrieval summary — post-reranker and candidates — appends `"eval_result"` events to trace log); default full mode adds LiteLLM judge scoring (JUDGE_PROMPT below) and per-question H@5/R@5/MRR columns in the LLM score table
-3. Build golden set: write 20 expert questions (8 how-to, 5 factual, 4 conceptual, 3 comparison); tag expected sources (`file_path` strings matching chunk payload paths); manually score Claude + docs.pinot.apache.org AI responses
+3. Build golden set: source-first — select ~20 source files spanning doc areas (ingestion, schema, querying, config, operations), write 1–2 questions per file following the 8/5/4/3 query type distribution; manually score Claude + docs.pinot.apache.org AI responses
 4. Run `python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change; V1 is done when:
    - Sommelier average score ≥ 2.5/3 across all 20 golden set questions
    - Sommelier average beats plain Claude average (all three dimensions)
@@ -808,10 +809,11 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview
 
 ### V1.1 Integrations
-1. Publish to PyPI: `uv publish`; verify `uv tool install sommelier` works end-to-end on a clean environment
-2. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; internally calls the full query pipeline (retrieval + inference via `llm.py`); returns the finished LLM answer as the tool result; add `tracer.start_trace()` + `tracer.flush()` per request; the MCP client (Claude) echoes the finished answer — no second LLM generation needed
-3. Write `.claude/commands/pinot.md`: Claude Code slash command that calls `sommelier query "$1"` via Bash; multi-turn follow-ups are handled by Claude's context window, not by `sommelier`'s own memory
-4. Update `README.md`: add PyPI install instructions, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
+1. Write `observability/cli.py`: `python -m sommelier logs --review` — lists recent query traces (newest first) with query text, retrieved file paths, and total latency; `p` promotes to `golden_set.json` (scaffolds entry with `expected_sources` pre-filled from `reranked[*].file_path`), `n` skips, `q` quits; useful for adding new golden set entries from real queries post-V1
+2. Publish to PyPI: `uv publish`; verify `uv tool install sommelier` works end-to-end on a clean environment
+3. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; internally calls the full query pipeline (retrieval + inference via `llm.py`); returns the finished LLM answer as the tool result; add `tracer.start_trace()` + `tracer.flush()` per request; the MCP client (Claude) echoes the finished answer — no second LLM generation needed
+4. Write `.claude/commands/pinot.md`: Claude Code slash command that calls `sommelier query "$1"` via Bash; multi-turn follow-ups are handled by Claude's context window, not by `sommelier`'s own memory
+5. Update `README.md`: add PyPI install instructions, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
 
 
 ## Completed Steps (in order)
