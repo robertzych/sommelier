@@ -785,10 +785,9 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Evaluations
-1. Write `evals/metrics.py`: pure functions — `hit_rate(retrieved: list[str], expected: list[str]) -> float`, `recall(retrieved, expected) -> float`, `mrr(retrieved, expected) -> float`, `full_recall_rate(questions: list[dict]) -> float`; all operate on `file_path` lists; tests in `tests/evals/test_metrics.py`
-2. Write `evals/eval.py`: `--retrieval-only` mode (calls search.py, computes metrics via metrics.py, prints two-block retrieval summary — post-reranker and candidates — appends `"eval_result"` events to trace log); default full mode adds LiteLLM judge scoring (JUDGE_PROMPT below) and per-question H@5/R@5/MRR columns in the LLM score table
-3. Build golden set: source-first — select ~20 source files spanning doc areas (ingestion, schema, querying, config, operations), write 1–2 questions per file following the 8/5/4/3 query type distribution; manually score Claude + docs.pinot.apache.org AI responses
-4. Run `python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change; V1 is done when:
+1. Write `evals/eval.py`: `--retrieval-only` mode (calls search.py, computes metrics via metrics.py, prints two-block retrieval summary — post-reranker and candidates — appends `"eval_result"` events to trace log); default full mode adds LiteLLM judge scoring (JUDGE_PROMPT below) and per-question H@5/R@5/MRR columns in the LLM score table
+2. Build golden set: source-first — select ~20 source files spanning doc areas (ingestion, schema, querying, config, operations), write 1–2 questions per file following the 8/5/4/3 query type distribution; manually score Claude + docs.pinot.apache.org AI responses
+3. Run `uv run python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change; V1 is done when:
    - Sommelier average score ≥ 2.5/3 across all 20 golden set questions
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
@@ -836,4 +835,7 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 ### Observability
 1. Write `observability/exporters.py`: `LocalJSONExporter` (JSON lines + size-based rotation), `LangfuseExporter` (Langfuse v4 API via `start_observation`), and `get_exporters(config)` factory. `langfuse>=4.0.0` added to main dependencies. Wired into `cli.py` via `_setup_tracer(config)` helper called in `cmd_ingest`, `cmd_query`, and `cmd_chat`. Extracted `_init_pipeline(config)` helper to remove repeated pipeline setup. `cli.py` test updated to mock `_setup_tracer` and `_init_pipeline`. 12 tests in `tests/observability/test_exporters.py`; Langfuse integration tests gated on `SOMMELIER_TEST_LANGFUSE_PUBLIC_KEY` + `SOMMELIER_TEST_LANGFUSE_SECRET_KEY`.
 2. Verify observability: confirmed query traces contain all fields (candidates with snippets, reranked with cross_encoder_score and snippet, stage_latency_ms, tokens, model, response) in `sommelier_traces.jsonl`; Langfuse UI shows correct latency and cost; ingestion traces appear per-file with correct inserted/deleted/skipped counts; `debug_retrieval=true` populates `from_dense`/`from_sparse` on candidates. `logs --review` deferred to V1.1 (requires `observability/cli.py`). Observed end-to-end latency ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s) — latency optimization tracked as a separate Next Step.
+
+### Evaluations
+1. Write `evals/metrics.py`: pure functions — `hit_rate`, `recall`, `mrr`, `full_recall_rate` — in `src/evals/metrics.py`. All operate on `file_path` lists. `hit_rate`/`recall`/`mrr` are per-question (take two `list[str]` args); `full_recall_rate` is dataset-level (takes `list[dict]` with `retrieved` and `expected_sources` keys). 31 tests in `tests/evals/test_metrics.py`.
 
