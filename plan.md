@@ -53,7 +53,7 @@ sommelier/
 └── evals/
     ├── golden_set.json     # Expert-written questions, expected sources, baseline scores
     ├── metrics.py          # Pure metric functions: hit_rate, recall, mrr, full_recall_rate at both retrieval stages
-    └── eval.py             # Eval runner: retrieval-only mode + full (retrieval + LLM judge) mode
+    └── eval.py             # Eval runner: --retrieval-only mode (V1); --judge mode deferred until after manual baseline
 ```
 
 ```
@@ -677,17 +677,13 @@ Total: 0–3. A score of 2+ is passing. Summaries reported as averages across th
 
 ### Eval Runner (`evals/eval.py`)
 
-Two modes:
+V1 mode (`--retrieval-only`):
 
 ```bash
-# Fast: retrieval metrics only, no LLM calls (~seconds)
 python evals/eval.py --golden-set evals/golden_set.json --retrieval-only
-
-# Full: retrieval + LLM generation + judge scoring
-python evals/eval.py --golden-set evals/golden_set.json --judge claude
 ```
 
-Full run output:
+Output:
 ```
 Prompt version: abc1234 (2026-05-07)
 
@@ -701,16 +697,15 @@ Retrieval (candidates, top-20):
   Hit Rate:        95%   (19/20)
   Recall:          92%   avg
 
-ID     Question (truncated)              H@5  R@5    MRR   Sommelier  Claude  Docs AI
-q001   How do I configure upsert?        ✓    100%   1.00  3/3        1/3     2/3
-q002   What is the default broker port?  ✓    100%   0.67  3/3        2/3     3/3
+ID     Question (truncated)              H@5  R@5    MRR
+q001   How do I configure upsert?        ✓    100%   1.00
+q002   What is the default broker port?  ✓    100%   0.67
 ...
-Avg LLM scores:                                            2.7/3      1.5/3   2.2/3
 ```
 
-Retrieval-only output shows the same two-block retrieval summary without the per-question LLM score columns.
+`eval.py` appends one `"eval_result"` event per question to `sommelier_traces.jsonl` after each run, containing the trace_id, question_id, and per-question retrieval metrics.
 
-`eval.py` appends one `"eval_result"` event per question to `sommelier_traces.jsonl` after each run, containing the trace_id, question_id, per-question retrieval metrics, and (if full run) LLM judge scores.
+**V1.1 mode (`--judge claude`)**: Adds LLM generation + LiteLLM judge scoring (JUDGE_PROMPT below); adds Sommelier/Claude/Docs AI score columns to the per-question table; validates against the manual baseline before use. Deferred until after manual judging establishes a baseline.
 
 ### LLM Judge Prompt (for automation / regression detection)
 
@@ -740,7 +735,7 @@ Source-first: choose expected sources before writing questions to ensure deliber
 2. For each source file, write 1–2 questions it directly answers, following the 8/5/4/3 query type distribution
 3. Query plain Claude for each question; paste answers into `golden_set.json`; score manually
 4. Query docs.pinot.apache.org AI manually for each question; paste answers; score manually
-5. Once Sommelier is built: run `eval.py` to get Sommelier scores automatically via LLM judge
+5. Once Sommelier is built: run `sommelier query` manually for each golden set question; paste answers into `golden_set.json` and score them using the same rubric; this manual baseline is used later to validate the LLM judge
 6. Target: Sommelier avg ≥ 2.5/3 and beats plain Claude average before declaring V1 done
 
 ---
@@ -785,12 +780,12 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Evaluations
-1. Write `evals/eval.py`: `--retrieval-only` mode (calls search.py, computes metrics via metrics.py, prints two-block retrieval summary — post-reranker and candidates — appends `"eval_result"` events to trace log); default full mode adds LiteLLM judge scoring (JUDGE_PROMPT below) and per-question H@5/R@5/MRR columns in the LLM score table
-2. Build golden set: source-first — select ~20 source files spanning doc areas (ingestion, schema, querying, config, operations), write 1–2 questions per file following the 8/5/4/3 query type distribution; manually score Claude + docs.pinot.apache.org AI responses
-3. Run `uv run python evals/eval.py --golden-set evals/golden_set.json --judge claude` after each significant change; V1 is done when:
-   - Sommelier average score ≥ 2.5/3 across all 20 golden set questions
+1. Build golden set: source-first — select ~20 source files spanning doc areas (ingestion, schema, querying, config, operations), write 1–2 questions per file following the 8/5/4/3 query type distribution; manually score Claude + docs.pinot.apache.org AI responses
+2. Run `uv run python -m evals.eval --golden-set evals/golden_set.json --retrieval-only` to validate retrieval; manually run `sommelier query` for each golden set question and score responses; V1 is done when:
+   - Sommelier average score ≥ 2.5/3 across all 20 golden set questions (manually scored)
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
+4. Implement LLM judge: add `--judge claude` mode to eval.py using LiteLLM + JUDGE_PROMPT; validate automated scores against the manual baseline before trusting them for regression detection
 
 ### Latency Optimization
 Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s) against a 3s target. The two bottlenecks are the fastembed cross-encoder ONNX model and the OpenAI API round-trip.
@@ -838,4 +833,5 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 
 ### Evaluations
 1. Write `evals/metrics.py`: pure functions — `hit_rate`, `recall`, `mrr`, `full_recall_rate` — in `src/evals/metrics.py`. All operate on `file_path` lists. `hit_rate`/`recall`/`mrr` are per-question (take two `list[str]` args); `full_recall_rate` is dataset-level (takes `list[dict]` with `retrieved` and `expected_sources` keys). 31 tests in `tests/evals/test_metrics.py`.
+2. Write `evals/eval.py`: `--retrieval-only` mode in `src/evals/eval.py`. Calls search.py for each question, captures candidates/reranked file paths from `tracer._trace`, computes metrics via `evals.metrics`, prints two-block retrieval summary, appends `"eval_result"` events to trace log. LLM judge mode deferred to a future step. Invoked as `uv run python -m evals.eval`. 4 tests in `tests/evals/test_eval.py` covering aggregate metric computation and full output string comparison for the summary.
 
