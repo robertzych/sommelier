@@ -9,17 +9,17 @@ from qdrant_client.models import ScoredPoint
 from inference.llm import build_user_message, complete
 from observability.tracer import tracer
 
-_OPENAI_TEST_API_KEY = os.environ.get("SOMMELIER_TEST_OPENAI_API_KEY")
+_ANTHROPIC_TEST_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 
 def _make_config(memory_turns: int = 5) -> types.SimpleNamespace:
     """Build a minimal config for inference tests."""
     return types.SimpleNamespace(
         inference=types.SimpleNamespace(
-            model="gpt-4o-mini",
+            model="anthropic/claude-haiku-4-5-20251001",
             temperature=0.1,
             memory_turns=memory_turns,
-            api_key=_OPENAI_TEST_API_KEY or "",
+            api_key=_ANTHROPIC_TEST_API_KEY or "",
         ),
     )
 
@@ -93,9 +93,9 @@ class TestBuildUserMessage:
 # ── complete() integration tests ─────────────────────────────────────────────
 
 
-@pytest.mark.skipif(not _OPENAI_TEST_API_KEY, reason="SOMMELIER_TEST_OPENAI_API_KEY not set")
+@pytest.mark.skipif(not _ANTHROPIC_TEST_API_KEY, reason="ANTHROPIC_API_KEY not set")
 class TestComplete:
-    """Integration tests for complete() using the live OpenAI API."""
+    """Integration tests for complete() using the live Anthropic API."""
 
     def test_streams_tokens_and_emits_full_tracer_output(self):
         """complete() yields string tokens and emits the full tracer payload.

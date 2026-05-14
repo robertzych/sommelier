@@ -780,12 +780,11 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Evaluations
-1. Build golden set: source-first — select ~20 source files spanning doc areas (ingestion, schema, querying, config, operations), write 1–2 questions per file following the 8/5/4/3 query type distribution; manually score Claude + docs.pinot.apache.org AI responses
-2. Run `uv run python -m evals.eval --golden-set evals/golden_set.json --retrieval-only` to validate retrieval; manually run `sommelier query` for each golden set question and score responses; V1 is done when:
-   - Sommelier average score ≥ 2.5/3 across all 20 golden set questions (manually scored)
+1. Run `uv run python -m evals.eval --golden-set evals/golden_set.json --retrieval-only` to validate retrieval; V1 is done when:
+   - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
-4. Implement LLM judge: add `--judge claude` mode to eval.py using LiteLLM + JUDGE_PROMPT; validate automated scores against the manual baseline before trusting them for regression detection
+2. Implement LLM judge: add `--judge claude` mode to eval.py using LiteLLM + JUDGE_PROMPT; validate automated scores against the manual baseline before trusting them for regression detection
 
 ### Latency Optimization
 Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s) against a 3s target. The two bottlenecks are the fastembed cross-encoder ONNX model and the OpenAI API round-trip.
@@ -834,4 +833,5 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 ### Evaluations
 1. Write `evals/metrics.py`: pure functions — `hit_rate`, `recall`, `mrr`, `full_recall_rate` — in `src/evals/metrics.py`. All operate on `file_path` lists. `hit_rate`/`recall`/`mrr` are per-question (take two `list[str]` args); `full_recall_rate` is dataset-level (takes `list[dict]` with `retrieved` and `expected_sources` keys). 31 tests in `tests/evals/test_metrics.py`.
 2. Write `evals/eval.py`: `--retrieval-only` mode in `src/evals/eval.py`. Calls search.py for each question, captures candidates/reranked file paths from `tracer._trace`, computes metrics via `evals.metrics`, prints two-block retrieval summary, appends `"eval_result"` events to trace log. LLM judge mode deferred to a future step. Invoked as `uv run python -m evals.eval`. 4 tests in `tests/evals/test_eval.py` covering aggregate metric computation and full output string comparison for the summary.
+3. Build golden set: 25 questions across 5 query types (how-to, factual, conceptual, comparison, new-in-2026); source-first selection spanning ingestion, indexing, querying, operations, and config doc areas. 5 new-in-2026 questions added targeting 2026 pinot-docs changes (native text index removal, Time Series Engine GA, MSE Lite Mode, Java 21 baseline, CROSS JOIN UNNEST) to expose knowledge cutoff weaknesses. Switched sommelier LLM from `gpt-4o-mini` to `anthropic/claude-haiku-4-5-20251001` (same knowledge cutoff as claude-sonnet-4-6, lower cost, stronger reasoning than gpt-4o-mini). Collected answers from all three baselines (docs_pinot_ai, claude-sonnet-4-6, sommelier/claude-haiku-4-5) and manually scored all 75 responses (accuracy, completeness, citations, total) using `evals/score_review.py`.
 
