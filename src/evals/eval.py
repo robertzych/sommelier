@@ -23,7 +23,7 @@ def load_golden_set(path: str) -> list[dict]:
         return json.load(f)["questions"]
 
 
-def _aggregate_retrieval_metrics(results: list[dict]) -> dict[str, Any]:
+def aggregate_retrieval_metrics(results: list[dict]) -> dict[str, Any]:
     """Compute aggregate retrieval metrics across all per-question result dicts.
 
     Each dict must have: hit_rate_reranked, recall_reranked, mrr_reranked,
@@ -174,7 +174,7 @@ def main() -> None:
         print(" done")
 
     print()
-    agg = _aggregate_retrieval_metrics(results)
+    agg = aggregate_retrieval_metrics(results)
     if agg:
         _print_retrieval_summary(agg, config.retrieval.rerank_top_k, config.retrieval.retrieval_top_k)
 

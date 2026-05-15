@@ -727,6 +727,36 @@ Respond with JSON only: {{"accuracy": 0|1, "completeness": 0|1, "citations": 0|1
 
 Human expert spot-checks a 20% sample of LLM judge scores per eval run to catch drift.
 
+### Report Generator (`evals/report.py`)
+
+Single-pass generator: reads `evals/golden_set.json` (quality scores) + parses `sommelier_traces.jsonl` (retrieval results), writes `evals/results.md`.
+
+```bash
+uv run python -m evals.report --golden-set evals/golden_set.json
+# optional: --traces sommelier_traces.jsonl  --output evals/results.md
+```
+
+**Trace parsing**: filter `event_type == "query"`, group by `query` text, take last occurrence. Trace fields used: `candidates[*].file_path`, `reranked[*].file_path`. If no trace found for a question, all retrieval metrics = 0 and question is flagged.
+
+**Report sections:**
+
+1. Header — timestamp (Pacific), prompt version, file paths, question count
+2. V1 Success Criteria — pass/fail: sommelier avg total ≥ 2.5, sommelier beats claude on accuracy/completeness/citations; retrieval values observed (calibrating)
+3. Aggregate Quality — overall by system (3 rows) + by query_type (5 types × 3 systems = 15 rows)
+4. Aggregate Retrieval — overall HR@5/RC@5/MRR@5/FRR@5 vs candidates@20 (HR/RC/MRR) + by query_type (5 rows)
+5. Per-Question Quality Table — 75 rows (25 × 3 systems in order: docs_pinot_ai, claude, sommelier): Query (50 chars) | System | Accuracy | Completeness | Citations | Total
+6. Per-Question Retrieval Table — 25 rows: ID | Query (50 chars) | HR@5 | RC@5 | MRR@5 | Miss? | Expected Sources. Miss? = "yes" if HR@5 = 0.
+7. Recommendations — rule-based bullets:
+   - Rule 1: HR@5=0 AND sommelier total < avg(docs_pinot_ai, claude) → retrieval miss + score drop
+   - Rule 2: docs_pinot_ai avg total − sommelier avg total > 0.5 per query_type → underperformance
+   - Rule 3: expected source never in reranked across ≥ 2 questions → missing source
+   - Rule 4: sommelier dimension avg < 0.5 → weak dimension
+   - Rule 5: failed V1 gate → specific next-step suggestion
+
+**Key functions** (all pure/unit-testable): `_parse_traces`, `_compute_retrieval_per_question`, `_aggregate_quality_by_system`, `_aggregate_quality_by_query_type`, `_aggregate_retrieval_by_query_type`, `_check_v1_gates`, `_generate_recommendations`, `_render_quality_table`, `_render_retrieval_table`, `_render_markdown`. Also rename `_aggregate_retrieval_metrics` → `aggregate_retrieval_metrics` in `eval.py` (public, imported by report.py).
+
+**Tests**: `tests/evals/test_report.py` — `TestParseTraces`, `TestComputeRetrievalPerQuestion`, `TestAggregateQualityBySystem`, `TestAggregateQualityByQueryType`, `TestAggregateRetrievalByQueryType`, `TestCheckV1Gates`, `TestGenerateRecommendations`, `TestRenderQualityTable`, `TestRenderRetrievalTable`.
+
 ### Build Process
 
 Source-first: choose expected sources before writing questions to ensure deliberate coverage across doc areas rather than clustering around whatever comes to mind.
@@ -780,11 +810,12 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 
 ### Evaluations
-1. Run `uv run python -m evals.eval --golden-set evals/golden_set.json --retrieval-only` to validate retrieval; V1 is done when:
+1. Investigate retrieval misses: four questions have HR@5=0 (q005, q009, q013, q015). For each: (a) check whether the expected source file is indexed in Qdrant (scroll by file_path); (b) determine if the miss is a retrieval failure (expected source absent from candidates@20 — hybrid search didn't find it) or a reranker failure (expected source present in candidates@20 but dropped to rank 6+). Two misses are at the candidates@20 level (check ingestion logs to confirm those files were indexed and their chunk content covers the question). Two misses are reranker failures (source was in top-20 but ranked out of top-5). Based on root cause: re-index missing files or tune reranker top-k.
+2. Run `uv run python -m evals.report` to produce `evals/results.md`; analyze results and act on recommendations. V1 is done when:
    - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
-2. Implement LLM judge: add `--judge claude` mode to eval.py using LiteLLM + JUDGE_PROMPT; validate automated scores against the manual baseline before trusting them for regression detection
+3. Implement LLM judge: add `--judge claude` mode to eval.py using LiteLLM + JUDGE_PROMPT; validate automated scores against the manual baseline before trusting them for regression detection
 
 ### Latency Optimization
 Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s) against a 3s target. The two bottlenecks are the fastembed cross-encoder ONNX model and the OpenAI API round-trip.
@@ -834,4 +865,5 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 1. Write `evals/metrics.py`: pure functions — `hit_rate`, `recall`, `mrr`, `full_recall_rate` — in `src/evals/metrics.py`. All operate on `file_path` lists. `hit_rate`/`recall`/`mrr` are per-question (take two `list[str]` args); `full_recall_rate` is dataset-level (takes `list[dict]` with `retrieved` and `expected_sources` keys). 31 tests in `tests/evals/test_metrics.py`.
 2. Write `evals/eval.py`: `--retrieval-only` mode in `src/evals/eval.py`. Calls search.py for each question, captures candidates/reranked file paths from `tracer._trace`, computes metrics via `evals.metrics`, prints two-block retrieval summary, appends `"eval_result"` events to trace log. LLM judge mode deferred to a future step. Invoked as `uv run python -m evals.eval`. 4 tests in `tests/evals/test_eval.py` covering aggregate metric computation and full output string comparison for the summary.
 3. Build golden set: 25 questions across 5 query types (how-to, factual, conceptual, comparison, new-in-2026); source-first selection spanning ingestion, indexing, querying, operations, and config doc areas. 5 new-in-2026 questions added targeting 2026 pinot-docs changes (native text index removal, Time Series Engine GA, MSE Lite Mode, Java 21 baseline, CROSS JOIN UNNEST) to expose knowledge cutoff weaknesses. Switched sommelier LLM from `gpt-4o-mini` to `anthropic/claude-haiku-4-5-20251001` (same knowledge cutoff as claude-sonnet-4-6, lower cost, stronger reasoning than gpt-4o-mini). Collected answers from all three baselines (docs_pinot_ai, claude-sonnet-4-6, sommelier/claude-haiku-4-5) and manually scored all 75 responses (accuracy, completeness, citations, total) using `evals/score_review.py`.
+4. Write `evals/report.py` and `tests/evals/test_report.py`. Renamed `_aggregate_retrieval_metrics` → `aggregate_retrieval_metrics` in `eval.py`; updated `tests/evals/test_eval.py`. All 28 tests pass. Report generates `evals/results.md` with 7 sections (75-row quality table, 25-row retrieval table, auto-generated recommendations). V1 gate results: sommelier avg 2.84/3 ✅, accuracy 0.92 > 0.56 ✅, completeness tied at 0.92 ❌, citations 1.00 > 0.00 ✅. Retrieval: HR@5 84% (4 misses: 2 retrieval failures at candidates@20, 2 reranker failures); MRR@5 0.57 vs candidates@20 MRR 0.64 indicates reranker occasionally demotes expected sources.
 

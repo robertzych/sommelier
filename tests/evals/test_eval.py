@@ -1,7 +1,7 @@
 """Unit tests for evals/eval.py: aggregate metrics and retrieval summary output."""
 import pytest
 
-from evals.eval import _aggregate_retrieval_metrics, _print_retrieval_summary
+from evals.eval import aggregate_retrieval_metrics, _print_retrieval_summary
 from evals.metrics import hit_rate, mrr, recall
 
 
@@ -19,15 +19,15 @@ def _make_result(reranked_fps: list[str], candidate_fps: list[str], expected: li
     }
 
 
-# ── _aggregate_retrieval_metrics ──────────────────────────────────────────────
+# ── aggregate_retrieval_metrics ──────────────────────────────────────────────
 
 
 class TestAggregateRetrievalMetrics:
-    """Tests for _aggregate_retrieval_metrics: averages per-question metrics to dataset level."""
+    """Tests for aggregate_retrieval_metrics: averages per-question metrics to dataset level."""
 
     def test_empty_results_returns_empty_dict(self):
         """Returns an empty dict when no results are provided."""
-        assert _aggregate_retrieval_metrics([]) == {}
+        assert aggregate_retrieval_metrics([]) == {}
 
     def test_averages_mixed_hit_and_miss(self):
         """Averages are 0.5 when one question hits and one misses across all metrics."""
@@ -35,7 +35,7 @@ class TestAggregateRetrievalMetrics:
             _make_result(["a.md"], ["a.md"], ["a.md"]),  # all metrics = 1.0
             _make_result(["z.md"], ["z.md"], ["b.md"]),  # all metrics = 0.0
         ]
-        agg = _aggregate_retrieval_metrics(results)
+        agg = aggregate_retrieval_metrics(results)
 
         assert agg["n"] == 2
         assert agg["hr_reranked"] == pytest.approx(0.5)
@@ -50,7 +50,7 @@ class TestAggregateRetrievalMetrics:
             _make_result(["a.md", "b.md"], ["a.md", "b.md"], ["a.md", "b.md"]),  # full recall
             _make_result(["c.md"], ["c.md"], ["c.md", "d.md"]),  # partial recall
         ]
-        agg = _aggregate_retrieval_metrics(results)
+        agg = aggregate_retrieval_metrics(results)
 
         assert agg["frr_reranked"] == pytest.approx(0.5)
 
