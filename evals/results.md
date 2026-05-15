@@ -1,6 +1,6 @@
 # Sommelier Eval Report
 
-**Generated:** 2026-05-15 16:07 PDT  
+**Generated:** 2026-05-15 16:26 PDT  
 **Prompt version:** 64b4182  
 **Golden set:** evals/golden_set.json (25 questions)  
 **Traces:** sommelier_traces.jsonl  
@@ -17,7 +17,7 @@
 | ✅ | Sommelier citations 1.00 > claude 0.00 |
 
 **Retrieval (observed — calibrating targets):**  
-HR@5: 84% &nbsp;|&nbsp; RC@5: 84% &nbsp;|&nbsp; MRR@5: 0.57 &nbsp;|&nbsp; FRR@5: 84%
+HR@5: 88% &nbsp;|&nbsp; RC@5: 88% &nbsp;|&nbsp; MRR@5: 0.61 &nbsp;|&nbsp; FRR@5: 88%
 
 ---
 
@@ -59,17 +59,17 @@ HR@5: 84% &nbsp;|&nbsp; RC@5: 84% &nbsp;|&nbsp; MRR@5: 0.57 &nbsp;|&nbsp; FRR@5:
 
 | Metric | Reranked @5 | Candidates @20 |
 |--------|------------|---------------|
-| Hit Rate | 84% (21/25) | 92% (23/25) |
-| Recall | 84% avg | 92% avg |
-| MRR | 0.57 | 0.64 |
-| Full Recall Rate | 84% (21/25) | — |
+| Hit Rate | 88% (22/25) | 96% (24/25) |
+| Recall | 88% avg | 96% avg |
+| MRR | 0.61 | 0.68 |
+| Full Recall Rate | 88% (22/25) | — |
 
 ### By Query Type
 
 | Query Type | HR@5 | RC@5 | MRR@5 | N |
 |------------|------|------|-------|---|
 | how-to | 88% | 88% | 0.53 | 8 |
-| factual | 60% | 60% | 0.47 | 5 |
+| factual | 80% | 80% | 0.67 | 5 |
 | conceptual | 75% | 75% | 0.56 | 4 |
 | comparison | 100% | 100% | 0.33 | 3 |
 | new-in-2026 | 100% | 100% | 0.90 | 5 |
@@ -174,7 +174,7 @@ HR@5: 84% &nbsp;|&nbsp; RC@5: 84% &nbsp;|&nbsp; MRR@5: 0.57 &nbsp;|&nbsp; FRR@5:
 | q010 | How often does the Pinot retention manager run, an… | 100% | 100% | 1.00 | no | `basics/concepts/segment-retention.md` |
 | q011 | What is the default port that Pinot servers listen… | 100% | 100% | 0.33 | no | `reference/configuration-reference/server.md` |
 | q012 | What periodic tasks does the Pinot controller run … | 100% | 100% | 1.00 | no | `basics/components/cluster/controller.md` |
-| q013 | What is the default segment retention for a Pinot … | 0% | 0% | 0.00 | yes ⚠️ | `reference/configuration-reference/table.md` |
+| q013 | What is the default segment retention for a Pinot … | 100% | 100% | 1.00 | no | `operate-pinot/troubleshooting/operations-faq.md` |
 | q014 | What are the roles of Apache Helix and ZooKeeper i… | 100% | 100% | 0.25 | no | `basics/architecture.md` |
 | q015 | What is the difference between offline, real-time,… | 0% | 0% | 0.00 | yes ⚠️ | `basics/components/table/README.md` |
 | q016 | What is the difference between Pinot's single-stag… | 100% | 100% | 1.00 | no | `build-with-pinot/querying-and-sql/sse-vs-mse.md` |

@@ -522,7 +522,7 @@
       "question": "What is the default segment retention for a Pinot table, and which configuration fields control it?",
       "query_type": "factual",
       "expected_sources": [
-        "reference/configuration-reference/table.md"
+        "operate-pinot/troubleshooting/operations-faq.md"
       ],
       "baseline_responses": {
         "docs_pinot_ai": {

@@ -808,14 +808,30 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ## Next Steps (in order)
 
-
 ### Evaluations
-1. Investigate retrieval misses: four questions have HR@5=0 (q005, q009, q013, q015). For each: (a) check whether the expected source file is indexed in Qdrant (scroll by file_path); (b) determine if the miss is a retrieval failure (expected source absent from candidates@20 — hybrid search didn't find it) or a reranker failure (expected source present in candidates@20 but dropped to rank 6+). Two misses are at the candidates@20 level (check ingestion logs to confirm those files were indexed and their chunk content covers the question). Two misses are reranker failures (source was in top-20 but ranked out of top-5). Based on root cause: re-index missing files or tune reranker top-k.
-2. Run `uv run python -m evals.report` to produce `evals/results.md`; analyze results and act on recommendations. V1 is done when:
+1. Fix q005 expected source: update `expected_sources` for q005 in `evals/golden_set.json` from `build-with-pinot/ingestion/stream-ingestion/README.md` to `basics/getting-started/first-stream-ingest.md`; regenerate `evals/results.md`. See `evals/retrieval_findings.md` for investigation details.
+2. Normalize Tables Fix (addresses q009, q013): in `ingest.py`, detect markdown tables and serialize each row as `"<property>: default <value>. <description>"` before chunking. Affects all `reference/configuration-reference/*.md` files. Re-run ingestion and re-evaluate HR@5/MRR@5 on q009 and q011 to confirm improvement. Add unit tests for the table normalization function.
+3. Merge Chunks Fix (addresses q003, q005): in `ingest.py` chunking, avoid splitting between a prose intro and its immediately following fenced code block. When a header section ends with a code block, include the code with the preceding prose rather than as a standalone chunk. Re-run ingestion and re-evaluate HR@5/MRR@5 on q003 and q005 to confirm improvement. Add unit tests.
+4. Alternative Rankers Fix (addresses q015): test `rerank_top_k=7` as a zero-cost mitigation (README.md was candidates rank 1, so it survives a looser cutoff); test Cohere Rerank API (`reranker = "cohere"`) against the golden set; measure HR@5 and MRR@5 before/after each change. Choose the configuration that improves q015 without regressing other questions.
+5. Run `uv run python -m evals.report` to produce `evals/results.md`; confirm V1 gates pass after retrieval fixes. V1 is done when:
    - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
-3. Implement LLM judge: add `--judge claude` mode to eval.py using LiteLLM + JUDGE_PROMPT; validate automated scores against the manual baseline before trusting them for regression detection
+
+### Citation Format
+1. Replace numbered inline citations with an unordered Sources list: update `prompts/system_prompt.md` to remove `[N]` inline marker instructions and the numbered Sources section; instruct the model to end every response with a **Sources** bullet list of file paths and section breadcrumbs for any documentation it drew on. Update the user message format in `llm.py` (`build_user_message`) to remove chunk numbering from context blocks — chunks can be delimited by `---` separators instead. Update `tests/inference/test_llm.py` to match the new context format.
+
+### V1 Packaging
+1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
+2. Wire `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; internally calls the full query pipeline (retrieval + inference via `llm.py`); returns the finished LLM answer as the tool result; add `tracer.start_trace()` + `tracer.flush()` per request; the MCP client (Claude) echoes the finished answer — no second LLM generation needed
+3. Write `.claude/commands/pinot.md`: Claude Code slash command that calls `sommelier query "$1"` via Bash; multi-turn follow-ups are handled by Claude's context window, not by `sommelier`'s own memory
+
+---
+
+## V2
+
+### LLM Judge
+1. Implement LLM judge: add `--judge claude` mode to eval.py using LiteLLM + JUDGE_PROMPT; validate automated scores against the manual baseline before trusting them for regression detection
 
 ### Latency Optimization
 Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s) against a 3s target. The two bottlenecks are the fastembed cross-encoder ONNX model and the OpenAI API round-trip.
@@ -825,18 +841,10 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 3. Evaluate Cohere Rerank latency: run a sample query with `reranker = "cohere"` and compare end-to-end latency vs fastembed. Cohere is a single HTTP call rather than local ONNX inference; may be faster depending on network conditions.
 4. LLM streaming UX: `total_latency_ms` measures time to last token, but the user sees the first token much sooner (~500–700ms). Confirm TTFT (time-to-first-token) is acceptable and document it separately from total latency in traces.
 
-### Citation Renumbering
-1. Post-process completed LLM responses to renumber inline citations sequentially. After all tokens are collected, scan the response text for `[N]` references, assign new sequential numbers `[1]`, `[2]`, `[3]`... in first-appearance order, rewrite both the inline citations and the Sources section entries to use the new numbers. Apply in both `cmd_query` and `cmd_chat`.
-
-### V1 Packaging
-1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview
-
-### V1.1 Integrations
+### Integrations
 1. Write `observability/cli.py`: `python -m sommelier logs --review` — lists recent query traces (newest first) with query text, retrieved file paths, and total latency; `p` promotes to `golden_set.json` (scaffolds entry with `expected_sources` pre-filled from `reranked[*].file_path`), `n` skips, `q` quits; useful for adding new golden set entries from real queries post-V1
 2. Publish to PyPI: `uv publish`; verify `uv tool install sommelier` works end-to-end on a clean environment
-3. Wire into `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; internally calls the full query pipeline (retrieval + inference via `llm.py`); returns the finished LLM answer as the tool result; add `tracer.start_trace()` + `tracer.flush()` per request; the MCP client (Claude) echoes the finished answer — no second LLM generation needed
-4. Write `.claude/commands/pinot.md`: Claude Code slash command that calls `sommelier query "$1"` via Bash; multi-turn follow-ups are handled by Claude's context window, not by `sommelier`'s own memory
-5. Update `README.md`: add PyPI install instructions, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
+3. Update `README.md`: add PyPI install instructions
 
 
 ## Completed Steps (in order)
