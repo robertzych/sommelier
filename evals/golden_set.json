@@ -249,10 +249,10 @@
         "sommelier (claude-haiku-4-5)": {
           "answer": "## Reloading Segments After Index Configuration Changes\n\nAfter modifying index configuration (such as adding inverted indexes), you must reload the segments to apply the changes. Pinot provides multiple methods:\n\n### Using the Swagger API\n\nInvoke the reload API at `http://localhost:9000/help#!/Segment/reloadAllSegments` to reload all segments [1][2].\n\nAlternatively, you can use a curl command to reload a specific table [4]:\n\n```bash\ncurl -X POST localhost:9000/segments/<table-name>/reload\n```\n\nThe API response includes a `reloadJobId` that you can use to monitor progress [2][4].\n\n### Monitoring Reload Status\n\nAfter initiating a reload, track its progress using the segment reload status API with the `reloadJobId` [2]:\n\n```bash\ncurl -X GET localhost:9000/segments/segmentReloadStatus/<reloadJobId>\n```\n\nThis returns details such as elapsed time, server count, success count, and total segment count [4].\n\n### Using the Pinot Admin Console\n\nIf you prefer a UI approach [5]:\n\n1. From the left navigation menu, select **Cluster Manager**.\n2. Under **TENANTS**, select the **Tenant Name**.\n3. From the list of tables, select the **Table Name**.\n4. Under **OPERATIONS**, click **Reload All Segments** (or select a specific segment under **SEGMENTS** and click **Reload Segment**).\n\n### Important Notes\n\n- Reloading segments does not impact in-flight queries; new segments replace existing ones only after existing segments finish serving queries [4].\n- For real-time tables, you may need to set `pinot.server.instance.reload.consumingSegment` to `true` in the server config before reloading [4].\n\n**Sources**\n\n1. operate-pinot/troubleshooting/ingestion-faq.md \u2014 Ingestion FAQ > Indexing > How to apply an inverted index to existing segments?\n2. operate-pinot/troubleshooting/README.md \u2014 Frequently Asked Questions (FAQs) > Indexing > Apply inverted index to existing setup\n4. tutorials/data-ingestion/schema-evolution.md \u2014 Schema Evolution > Reload table segments\n5. operate-pinot/segment-reload.md \u2014 Reload a table segment > Use the Pinot Admin Console to reload segments",
           "scores": {
-            "accuracy": 0,
+            "accuracy": 1,
             "completeness": 1,
             "citations": 1,
-            "total": 2
+            "total": 3
           },
           "scored_by": "Robert Zych",
           "scored_on": "2026-05-14T12:54:53-0700"

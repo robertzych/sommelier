@@ -1,6 +1,6 @@
 # Sommelier Eval Report
 
-**Generated:** 2026-05-14 16:39 PDT  
+**Generated:** 2026-05-15 16:07 PDT  
 **Prompt version:** 64b4182  
 **Golden set:** evals/golden_set.json (25 questions)  
 **Traces:** sommelier_traces.jsonl  
@@ -11,8 +11,8 @@
 
 | | Gate |
 |-|------|
-| ✅ | Sommelier avg total 2.84/3 ≥ 2.5 |
-| ✅ | Sommelier accuracy 0.92 > claude 0.56 |
+| ✅ | Sommelier avg total 2.88/3 ≥ 2.5 |
+| ✅ | Sommelier accuracy 0.96 > claude 0.56 |
 | ❌ | Sommelier completeness 0.92 ≤ claude 0.92 |
 | ✅ | Sommelier citations 1.00 > claude 0.00 |
 
@@ -29,7 +29,7 @@ HR@5: 84% &nbsp;|&nbsp; RC@5: 84% &nbsp;|&nbsp; MRR@5: 0.57 &nbsp;|&nbsp; FRR@5:
 |--------|-------------|-----------------|--------------|----------|
 | docs_pinot_ai | 1.00 | 1.00 | 1.00 | 3.00 |
 | claude (claude-sonnet-4-6) | 0.56 | 0.92 | 0.00 | 1.48 |
-| sommelier (claude-haiku-4-5) | 0.92 | 0.92 | 1.00 | 2.84 |
+| sommelier (claude-haiku-4-5) | 0.96 | 0.92 | 1.00 | 2.88 |
 
 ### By Query Type
 
@@ -37,7 +37,7 @@ HR@5: 84% &nbsp;|&nbsp; RC@5: 84% &nbsp;|&nbsp; MRR@5: 0.57 &nbsp;|&nbsp; FRR@5:
 |------------|--------|-------------|-----------------|--------------|----------|---|
 | how-to | docs_pinot_ai | 1.00 | 1.00 | 1.00 | 3.00 | 8 |
 | how-to | claude (claude-sonnet-4-6) | 0.38 | 0.88 | 0.00 | 1.25 | 8 |
-| how-to | sommelier (claude-haiku-4-5) | 0.88 | 0.75 | 1.00 | 2.62 | 8 |
+| how-to | sommelier (claude-haiku-4-5) | 1.00 | 0.75 | 1.00 | 2.75 | 8 |
 | factual | docs_pinot_ai | 1.00 | 1.00 | 1.00 | 3.00 | 5 |
 | factual | claude (claude-sonnet-4-6) | 0.80 | 0.80 | 0.00 | 1.60 | 5 |
 | factual | sommelier (claude-haiku-4-5) | 0.80 | 1.00 | 1.00 | 2.80 | 5 |
@@ -97,7 +97,7 @@ HR@5: 84% &nbsp;|&nbsp; RC@5: 84% &nbsp;|&nbsp; MRR@5: 0.57 &nbsp;|&nbsp; FRR@5:
 |  | sommelier (claude-haiku-4-5) | 1 | 0 | 1 | 2 |
 | How do you reload Pinot segments after changing an… | docs_pinot_ai | 1 | 1 | 1 | 3 |
 |  | claude (claude-sonnet-4-6) | 1 | 1 | 0 | 2 |
-|  | sommelier (claude-haiku-4-5) | 0 | 1 | 1 | 2 |
+|  | sommelier (claude-haiku-4-5) | 1 | 1 | 1 | 3 |
 | How do you configure a bloom filter on a Pinot tab… | docs_pinot_ai | 1 | 1 | 1 | 3 |
 |  | claude (claude-sonnet-4-6) | 0 | 1 | 0 | 1 |
 |  | sommelier (claude-haiku-4-5) | 1 | 1 | 1 | 3 |
