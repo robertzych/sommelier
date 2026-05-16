@@ -808,13 +808,15 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ## Next Steps (in order)
 
-### Evaluations
+### Fixes
 1. Fix q005 expected source: update `expected_sources` for q005 in `evals/golden_set.json` from `build-with-pinot/ingestion/stream-ingestion/README.md` to `basics/getting-started/first-stream-ingest.md`; regenerate `evals/results.md`. See `evals/retrieval_findings.md` for investigation details.
 2. Normalize Tables Fix (addresses q009, q013): in `ingest.py`, detect markdown tables and serialize each row as `"<property>: default <value>. <description>"` before chunking. Affects all `reference/configuration-reference/*.md` files. Re-run ingestion and re-evaluate HR@5/MRR@5 on q009 and q011 to confirm improvement. Add unit tests for the table normalization function.
 3. Merge Chunks Fix (addresses q003, q005): in `ingest.py` chunking, avoid splitting between a prose intro and its immediately following fenced code block. When a header section ends with a code block, include the code with the preceding prose rather than as a standalone chunk. Re-run ingestion and re-evaluate HR@5/MRR@5 on q003 and q005 to confirm improvement. Add unit tests.
 4. Alternative Rankers Fix (addresses q015): test `rerank_top_k=7` as a zero-cost mitigation (README.md was candidates rank 1, so it survives a looser cutoff); test Cohere Rerank API (`reranker = "cohere"`) against the golden set; measure HR@5 and MRR@5 before/after each change. Choose the configuration that improves q015 without regressing other questions.
-5. Evaluate multi-turn chat: build a small set of multi-turn golden conversations (3–5 sessions, 2–3 turns each) where turn 2 requires context established in turn 1 (e.g., "How do I configure upsert?" → "What are the limitations of that?"); run via `sommelier chat` piped mode; verify conversation memory carries context across turns and that retrieval + citation quality hold; score accuracy/completeness/citations per turn using the same 0–1 rubric.
-6. Run `uv run python -m evals.report` to produce `evals/results.md`; confirm V1 gates pass after retrieval fixes. V1 is done when:
+
+### Evaluations
+1. Evaluate multi-turn chat: build a small set of multi-turn golden conversations (3–5 sessions, 2–3 turns each) where turn 2 requires context established in turn 1 (e.g., "How do I configure upsert?" → "What are the limitations of that?"); run via `sommelier chat` piped mode; verify conversation memory carries context across turns and that retrieval + citation quality hold; score accuracy/completeness/citations per turn using the same 0–1 rubric.
+2. Run `uv run python -m evals.report` to produce `evals/results.md`; confirm V1 gates pass after retrieval fixes. V1 is done when:
    - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
    - Sommelier average beats plain Claude average (all three dimensions)
    - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
