@@ -354,7 +354,7 @@
       ],
       "baseline_responses": {
         "docs_pinot_ai": {
-          "answer": "The broker HTTP port is 8099 by default.\n\nIn legacy config, that value comes from pinot.broker.client.queryPort. It is marked deprecated, and the docs say to use pinot.broker.client.access.protocols.http.port instead. See Broker and Configuring TLS/SSL.\n\nWith the newer listener-based setup, pinot.broker.client.access.protocols.http.port controls the broker's HTTP port.\n\nExample:\n\npinot.broker.client.access.protocols=http\npinot.broker.client.access.protocols.http.port=8099\n\nSources: Broker, Broker, Monitoring Metrics, Configuring TLS/SSL, Server, Java, Advanced Pinot Setup, Default Disabled Rules, Cluster Configuration, Broker gRPC API",
+          "answer": "The default Pinot broker query port is 8099.\n\nThe legacy property that controls it is pinot.broker.client.queryPort. It is marked deprecated. Use pinot.broker.client.access.protocols.http.port instead for the HTTP query listener.\n\nSee the broker configuration reference in Broker.\n\nDefault port: 8099\n\nLegacy property: pinot.broker.client.queryPort\n\nCurrent property: pinot.broker.client.access.protocols.http.port\n\nIf you are using gRPC instead of HTTP, the broker uses pinot.broker.grpc.port or pinot.broker.grpc.tls.port.\n\nSources: Broker, Broker,Broker gRPC API, JDBC, Monitoring Metrics, Broker Query API, Query Syntax Overview, Multi-Cluster Querying, Java, Default Disabled Rules",
           "scores": {
             "accuracy": 1,
             "completeness": 1,
@@ -362,10 +362,10 @@
             "total": 3
           },
           "scored_by": "Robert Zych",
-          "scored_on": "2026-05-14T13:16:37-0700"
+          "scored_on": "2026-05-16T13:16:37-0700"
         },
         "claude (claude-sonnet-4-6)": {
-          "answer": "Default port: 8099\n\n  The configuration property that controls it is:\n\n  pinot.broker.client.queryPort=8099\n\n  Set in the broker's configuration file (typically broker.conf or passed via -D JVM args at startup):\n\n  bin/pinot-admin.sh StartBroker \\\n    -clusterName myCluster \\\n    -zkAddress zookeeper:2181 \\\n    -port 8099\n\n  Or in a config file:\n\n  pinot.broker.client.queryPort=8099\n\n  Other default Pinot component ports for reference\n\n  Controller: 9000\n  Broker: 8099\n  Server (query): 8098\n  Server (admin): 8097\n  Minion: 9514",
+          "answer": "The default query port for the Pinot broker is 8099.\n\nThe configuration property that controls it is:\n\npinot.broker.client.queryPort",
           "scores": {
             "accuracy": 1,
             "completeness": 0,
@@ -373,7 +373,7 @@
             "total": 1
           },
           "scored_by": "Robert Zych",
-          "scored_on": "2026-05-14T13:18:48-0700"
+          "scored_on": "2026-05-16T13:18:48-0700"
         },
         "sommelier (claude-haiku-4-5)": {
           "answer": "The default query port for the Pinot broker is **8099**, controlled by the configuration property `pinot.broker.client.queryPort` [1].\n\nHowever, note that this property is **deprecated**. The recommended approach is to use the newer properties instead [1]:\n\n- `pinot.broker.client.access.protocols.http.port` \u2014 for HTTP queries\n- `pinot.broker.client.access.protocols.https.port` \u2014 for HTTPS queries\n- `pinot.broker.grpc.port` \u2014 for gRPC queries\n\nYou should also set `pinot.broker.client.access.protocols` to specify which protocols to enable (e.g., `http` or `https` or `http,https`) [1].\n\n**Sources**\n\n1. reference/configuration-reference/broker.md \u2014 Broker",
