@@ -14,6 +14,7 @@ from vector_store.qdrant_store import PINOT_DOCS_COLLECTION
 _HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
 _GITBOOK_TAG = re.compile(r"\{%.*?%\}", re.DOTALL)
 _EXCESS_BLANKS = re.compile(r"\n{3,}")
+_TABLE_SEP_CELL = re.compile(r"^[-: ]+$")
 
 
 def clean_gitbook(text: str) -> str:
@@ -21,6 +22,69 @@ def clean_gitbook(text: str) -> str:
     text = _GITBOOK_TAG.sub("", text)
     text = _EXCESS_BLANKS.sub("\n\n", text)
     return text.strip()
+
+
+def _parse_row(line: str) -> list[str]:
+    """Split a markdown table row into stripped cell strings."""
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def normalize_tables(text: str) -> str:
+    """Convert config-reference markdown tables to prose for better retrieval.
+
+    Tables whose second column header contains 'default' (case-insensitive) are
+    converted from row-per-property format to one prose sentence per property:
+    '<property>: default <value>. <description>'
+
+    All other tables are left unchanged.
+    """
+    lines = text.splitlines(keepends=True)
+    result: list[str] = []
+    i = 0
+    while i < len(lines):
+        if not lines[i].rstrip("\n").startswith("|"):
+            result.append(lines[i])
+            i += 1
+            continue
+
+        # Collect contiguous table lines
+        table_lines: list[str] = []
+        while i < len(lines) and lines[i].rstrip("\n").startswith("|"):
+            table_lines.append(lines[i].rstrip("\n"))
+            i += 1
+
+        # Need at least header + separator + one data row
+        if len(table_lines) < 3:
+            result.extend(l + "\n" for l in table_lines)
+            continue
+
+        header_cells = _parse_row(table_lines[0])
+        sep_cells = _parse_row(table_lines[1])
+
+        is_config_table = (
+            len(header_cells) >= 2
+            and bool(sep_cells)
+            and all(_TABLE_SEP_CELL.match(c) for c in sep_cells)
+            and "default" in header_cells[1].lower()
+        )
+
+        if not is_config_table:
+            result.extend(l + "\n" for l in table_lines)
+            continue
+
+        for data_line in table_lines[2:]:
+            cells = _parse_row(data_line)
+            while len(cells) < 3:
+                cells.append("")
+            prop = cells[0]
+            default_val = cells[1] if cells[1] else "no default"
+            description = cells[2]
+            sentence = f"{prop}: default {default_val}."
+            if description:
+                sentence = f"{sentence} {description}"
+            result.append(sentence + "\n")
+
+    return "".join(result)
 
 
 def derive_point_id(chunk_text: str) -> uuid.UUID:
@@ -32,7 +96,8 @@ def derive_point_id(chunk_text: str) -> uuid.UUID:
 def _chunk_markdown(raw_markdown: str):
     """Clean and split a markdown document into header-aware, size-bounded chunks."""
     md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS)
-    header_splits = md_splitter.split_text(clean_gitbook(raw_markdown))
+    cleaned = normalize_tables(clean_gitbook(raw_markdown))
+    header_splits = md_splitter.split_text(cleaned)
     char_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=512, chunk_overlap=50
     )

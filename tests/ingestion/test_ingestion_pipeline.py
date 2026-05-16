@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 from embeddings.provider import BM25Provider, FastEmbedProvider
-from ingestion.ingest import clean_gitbook, derive_point_id, index_file, ingest
+from ingestion.ingest import clean_gitbook, derive_point_id, index_file, ingest, normalize_tables
 from vector_store.qdrant_store import PINOT_DOCS_COLLECTION, ensure_collection, get_client
 
 _DENSE_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -74,6 +74,90 @@ class TestCleanGitBook:
         assert "content-ref" not in result
         assert "Before" in result
         assert "After" in result
+
+
+class TestNormalizeTables:
+    """Unit tests for normalize_tables: verify config-reference tables are converted to prose."""
+
+    _CONFIG_TABLE = (
+        "| Property | Default | Description |\n"
+        "| --- | --- | --- |\n"
+        "| pinot.broker.timeoutMs | 10 seconds | Timeout for broker query. |\n"
+        "| pinot.broker.client.queryPort | 8099 | Legacy broker HTTP port. |\n"
+    )
+
+    def test_config_table_converted_to_prose(self):
+        """A Property/Default/Description table is serialized to one prose line per row."""
+        result = normalize_tables(self._CONFIG_TABLE)
+        assert "pinot.broker.timeoutMs: default 10 seconds." in result
+        assert "Timeout for broker query." in result
+        assert "pinot.broker.client.queryPort: default 8099." in result
+        assert "Legacy broker HTTP port." in result
+
+    def test_no_markdown_table_syntax_in_output(self):
+        """Normalized output contains no pipe characters from the original table."""
+        result = normalize_tables(self._CONFIG_TABLE)
+        assert "|" not in result
+
+    def test_empty_default_becomes_no_default(self):
+        """A row with an empty Default cell produces 'no default' in the prose."""
+        table = (
+            "| Property | Default | Description |\n"
+            "| --- | --- | --- |\n"
+            "| pinot.broker.client.access.protocols.http.port |  | Port to query broker via http |\n"
+        )
+        result = normalize_tables(table)
+        assert "no default" in result
+        assert "Port to query broker via http" in result
+
+    def test_non_default_table_left_unchanged(self):
+        """A table whose second column is not 'Default' is left as-is."""
+        table = (
+            "| Feature | Status | Notes |\n"
+            "| --- | --- | --- |\n"
+            "| Upsert | GA | Requires LLC |\n"
+        )
+        result = normalize_tables(table)
+        assert result == table
+
+    def test_prose_outside_table_preserved(self):
+        """Text before and after the table is not modified."""
+        text = "Before the table.\n" + self._CONFIG_TABLE + "After the table.\n"
+        result = normalize_tables(text)
+        assert result.startswith("Before the table.")
+        assert result.endswith("After the table.\n")
+
+    def test_empty_description_omitted(self):
+        """A row with an empty description produces only '<property>: default <value>.'"""
+        table = (
+            "| Property | Default | Description |\n"
+            "| --- | --- | --- |\n"
+            "| pinot.broker.enableTableLevelMetrics | true |  |\n"
+        )
+        result = normalize_tables(table)
+        assert result.strip() == "pinot.broker.enableTableLevelMetrics: default true."
+
+    def test_non_table_text_unchanged(self):
+        """Plain prose with no table is returned unchanged."""
+        text = "The default broker port is 8099.\n"
+        assert normalize_tables(text) == text
+
+    def test_multiple_tables_mixed(self):
+        """Config tables are normalized while non-config tables are preserved."""
+        config_table = (
+            "| Property | Default | Description |\n"
+            "| --- | --- | --- |\n"
+            "| pinot.broker.timeoutMs | 10 seconds | Broker timeout. |\n"
+        )
+        other_table = (
+            "| Table Type | Storage | Notes |\n"
+            "| --- | --- | --- |\n"
+            "| Offline | Deep store | Batch |\n"
+        )
+        text = config_table + "\n" + other_table
+        result = normalize_tables(text)
+        assert "pinot.broker.timeoutMs: default 10 seconds." in result
+        assert "| Offline | Deep store | Batch |" in result
 
 
 class TestDerivePointId:
