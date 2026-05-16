@@ -178,7 +178,7 @@
       "question": "How do you set up real-time ingestion from Kafka in Pinot?",
       "query_type": "how-to",
       "expected_sources": [
-        "build-with-pinot/ingestion/stream-ingestion/README.md"
+        "basics/getting-started/first-stream-ingest.md"
       ],
       "baseline_responses": {
         "docs_pinot_ai": {

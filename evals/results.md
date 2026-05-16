@@ -1,6 +1,6 @@
 # Sommelier Eval Report
 
-**Generated:** 2026-05-15 16:26 PDT  
+**Generated:** 2026-05-16 07:15 PDT  
 **Prompt version:** 64b4182  
 **Golden set:** evals/golden_set.json (25 questions)  
 **Traces:** sommelier_traces.jsonl  
@@ -17,7 +17,7 @@
 | ✅ | Sommelier citations 1.00 > claude 0.00 |
 
 **Retrieval (observed — calibrating targets):**  
-HR@5: 88% &nbsp;|&nbsp; RC@5: 88% &nbsp;|&nbsp; MRR@5: 0.61 &nbsp;|&nbsp; FRR@5: 88%
+HR@5: 92% &nbsp;|&nbsp; RC@5: 92% &nbsp;|&nbsp; MRR@5: 0.65 &nbsp;|&nbsp; FRR@5: 92%
 
 ---
 
@@ -59,16 +59,16 @@ HR@5: 88% &nbsp;|&nbsp; RC@5: 88% &nbsp;|&nbsp; MRR@5: 0.61 &nbsp;|&nbsp; FRR@5:
 
 | Metric | Reranked @5 | Candidates @20 |
 |--------|------------|---------------|
-| Hit Rate | 88% (22/25) | 96% (24/25) |
-| Recall | 88% avg | 96% avg |
-| MRR | 0.61 | 0.68 |
-| Full Recall Rate | 88% (22/25) | — |
+| Hit Rate | 92% (23/25) | 100% (25/25) |
+| Recall | 92% avg | 100% avg |
+| MRR | 0.65 | 0.72 |
+| Full Recall Rate | 92% (23/25) | — |
 
 ### By Query Type
 
 | Query Type | HR@5 | RC@5 | MRR@5 | N |
 |------------|------|------|-------|---|
-| how-to | 88% | 88% | 0.53 | 8 |
+| how-to | 100% | 100% | 0.65 | 8 |
 | factual | 80% | 80% | 0.67 | 5 |
 | conceptual | 75% | 75% | 0.56 | 4 |
 | comparison | 100% | 100% | 0.33 | 3 |
@@ -166,7 +166,7 @@ HR@5: 88% &nbsp;|&nbsp; RC@5: 88% &nbsp;|&nbsp; MRR@5: 0.61 &nbsp;|&nbsp; FRR@5:
 | q002 | How do you enable upsert segment compaction on a P… | 100% | 100% | 0.50 | no | `build-with-pinot/ingestion/upsert-and-dedup/segment-compaction-on-upserts.md` |
 | q003 | How do you configure a star-tree index in Pinot? | 100% | 100% | 0.20 | no | `build-with-pinot/indexing/star-tree-index.md` |
 | q004 | How do you enable an inverted index on a column in… | 100% | 100% | 1.00 | no | `build-with-pinot/indexing/inverted-index.md` |
-| q005 | How do you set up real-time ingestion from Kafka i… | 0% | 0% | 0.00 | yes ⚠️ | `build-with-pinot/ingestion/stream-ingestion/README.md` |
+| q005 | How do you set up real-time ingestion from Kafka i… | 100% | 100% | 1.00 | no | `basics/getting-started/first-stream-ingest.md` |
 | q006 | How do you reload Pinot segments after changing an… | 100% | 100% | 0.20 | no | `operate-pinot/segment-reload.md` |
 | q007 | How do you configure a bloom filter on a Pinot tab… | 100% | 100% | 1.00 | no | `build-with-pinot/indexing/bloom-filter.md` |
 | q008 | How do you apply a transformation to a column at i… | 100% | 100% | 1.00 | no | `build-with-pinot/ingestion/ingestion-level-transformations.md` |
