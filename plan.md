@@ -811,7 +811,7 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 ### Fixes
 1. Merge Chunks Fix (addresses q003, q005): in `ingest.py` chunking, avoid splitting between a prose intro and its immediately following fenced code block. When a header section ends with a code block, include the code with the preceding prose rather than as a standalone chunk. Re-run ingestion and re-evaluate HR@5/MRR@5 on q003 and q005 to confirm improvement. Add unit tests.
 2. Alternative Rankers Fix (addresses q015): only investigate if q015 is still a miss after the ingestion fixes above. Test `rerank_top_k=7` as a zero-cost mitigation (README.md was candidates rank 1, so it survives a looser cutoff); test Cohere Rerank API (`reranker = "cohere"`) against the golden set; measure HR@5 and MRR@5 before/after each change. Choose the configuration that improves q015 without regressing other questions.
-3. Re-grade all 25 questions: once all ingestion fixes are applied, run `sommelier query` for all 25 golden set questions; update all sommelier scores in `evals/golden_set.json`; regenerate `evals/results.md` and confirm V1 gates pass.
+3. System Prompt Completeness Fix (addresses completeness V1 gate failure): sommelier completeness (0.92) tied with claude rather than beating it, failing the V1 gate. Review the questions where sommelier scored completeness=0 to identify patterns (e.g., truncated answers, missing caveats, skipped sub-questions). Update `prompts/system_prompt.md` to address the patterns found — likely: instruct the model to cover all parts of multi-part questions, include relevant caveats and limitations from the retrieved context, and never truncate when the context supports a fuller answer. Spot-check the previously failing questions via `sommelier query` to confirm improvement before re-grading.
 
 ### Evaluations
 1. Evaluate multi-turn chat: build a small set of multi-turn golden conversations (3–5 sessions, 2–3 turns each) where turn 2 requires context established in turn 1 (e.g., "How do I configure upsert?" → "What are the limitations of that?"); run via `sommelier chat` piped mode; verify conversation memory carries context across turns and that retrieval + citation quality hold; score accuracy/completeness/citations per turn using the same 0–1 rubric.
@@ -822,6 +822,9 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ### Citation Format
 1. Replace numbered inline citations with an unordered Sources list: update `prompts/system_prompt.md` to remove `[N]` inline marker instructions and the numbered Sources section; instruct the model to end every response with a **Sources** bullet list of file paths and section breadcrumbs for any documentation it drew on. Update the user message format in `llm.py` (`build_user_message`) to remove chunk numbering from context blocks — chunks can be delimited by `---` separators instead. Update `tests/inference/test_llm.py` to match the new context format.
+
+### Re-grade
+1. Re-grade all 25 questions: once all ingestion and prompt fixes are applied, run `sommelier query` for all 25 golden set questions; update all sommelier scores in `evals/golden_set.json`; regenerate `evals/results.md` and confirm V1 gates pass.
 
 ### V1 Packaging
 1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
