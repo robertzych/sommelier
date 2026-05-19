@@ -808,9 +808,6 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ## Next Steps (in order)
 
-### Fixes
-1. System Prompt Completeness Fix (addresses completeness V1 gate failure): sommelier completeness (0.92) tied with claude rather than beating it, failing the V1 gate. Review the questions where sommelier scored completeness=0 to identify patterns (e.g., truncated answers, missing caveats, skipped sub-questions). Update `prompts/system_prompt.md` to address the patterns found — likely: instruct the model to cover all parts of multi-part questions, include relevant caveats and limitations from the retrieved context, and never truncate when the context supports a fuller answer. Spot-check the previously failing questions via `sommelier query` to confirm improvement before re-grading.
-
 ### Evaluations
 1. Evaluate multi-turn chat: build a small set of multi-turn golden conversations (3–5 sessions, 2–3 turns each) where turn 2 requires context established in turn 1 (e.g., "How do I configure upsert?" → "What are the limitations of that?"); run via `sommelier chat` piped mode; verify conversation memory carries context across turns and that retrieval + citation quality hold; score accuracy/completeness/citations per turn using the same 0–1 rubric.
 2. Run `uv run python -m evals.report` to produce `evals/results.md`; confirm V1 gates pass after retrieval fixes. V1 is done when:
