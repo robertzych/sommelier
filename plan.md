@@ -808,9 +808,6 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ## Next Steps (in order)
 
-### Citation Format
-1. Replace numbered inline citations with an unordered Sources list: update `prompts/system_prompt.md` to remove `[N]` inline marker instructions and the numbered Sources section; instruct the model to end every response with a **Sources** bullet list of file paths and section breadcrumbs for any documentation it drew on. Update the user message format in `llm.py` (`build_user_message`) to remove chunk numbering from context blocks — chunks can be delimited by `---` separators instead. Update `tests/inference/test_llm.py` to match the new context format.
-
 ### Re-grade
 1. Re-grade all 25 questions: once all ingestion and prompt fixes are applied, run `sommelier query` for all 25 golden set questions; update all sommelier scores in `evals/golden_set.json`; run `uv run python -m evals.report` to regenerate `evals/results.md`; confirm V1 gates pass:
    - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
@@ -882,4 +879,7 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 
 ### Multi-turn Evaluations
 1. Evaluate multi-turn chat (simplified): built `evals/golden_set_followup.json` with 5 follow-up questions — one per query type (how-to, factual, conceptual, comparison, new-in-2026) — selecting parent questions where sommelier scored 3. Each follow-up is turn 2 in a two-turn conversation; each entry stores the parent question and sommelier's turn-1 answer so the eval runner can reconstruct full conversation context. docs_pinot_ai excluded (no multi-turn support); claude excluded (citations dimension always scores 0, making multi-turn scoring unrepresentative). Added `--followup-id` and `--followup-file` flags to `sommelier query` (`src/cli.py`): seeds conversation history from `parent.question` and `parent.sommelier_answer` before running the follow-up through the full retrieval + inference pipeline; question defaults to the file entry when omitted from the CLI. 5 new tests in `tests/test_cli.py` (`TestLoadFollowupHistory`, `TestCmdQueryFollowup`). All 5 follow-ups scored 3/3 (accuracy=1, completeness=1, citations=1) — conversation memory carried context correctly across turns in every case.
+
+### Citation Format
+1. Replaced `[N]` inline citations with an unordered **Sources** bullet list: updated `prompts/system_prompt.md` to remove numbered-citation instructions and add a Sources bullet-list instruction; updated `build_user_message` in `llm.py` to remove `[N]` chunk headers and separate chunks with `---`; updated `tests/inference/test_llm.py` to assert `---` separator and absence of `[N]` markers. Also changed `prompt_version` in `observability/tracer.py` from a `git log` commit hash to a SHA-256 content hash of `system_prompt.md` — eliminates the git subprocess dependency and reflects uncommitted edits immediately.
 
