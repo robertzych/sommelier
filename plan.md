@@ -808,17 +808,14 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ## Next Steps (in order)
 
-### Evaluations
-1. Run `uv run python -m evals.report` to produce `evals/results.md`; confirm V1 gates pass after retrieval fixes. V1 is done when:
-   - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
-   - Sommelier average beats plain Claude average (all three dimensions)
-   - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
-
 ### Citation Format
 1. Replace numbered inline citations with an unordered Sources list: update `prompts/system_prompt.md` to remove `[N]` inline marker instructions and the numbered Sources section; instruct the model to end every response with a **Sources** bullet list of file paths and section breadcrumbs for any documentation it drew on. Update the user message format in `llm.py` (`build_user_message`) to remove chunk numbering from context blocks — chunks can be delimited by `---` separators instead. Update `tests/inference/test_llm.py` to match the new context format.
 
 ### Re-grade
-1. Re-grade all 25 questions: once all ingestion and prompt fixes are applied, run `sommelier query` for all 25 golden set questions; update all sommelier scores in `evals/golden_set.json`; regenerate `evals/results.md` and confirm V1 gates pass.
+1. Re-grade all 25 questions: once all ingestion and prompt fixes are applied, run `sommelier query` for all 25 golden set questions; update all sommelier scores in `evals/golden_set.json`; run `uv run python -m evals.report` to regenerate `evals/results.md`; confirm V1 gates pass:
+   - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
+   - Sommelier average beats plain Claude average (all three dimensions)
+   - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
 
 ### V1 Packaging
 1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
