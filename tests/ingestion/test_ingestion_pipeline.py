@@ -3,9 +3,22 @@ import types
 import uuid
 
 import pytest
+from langchain_core.documents import Document
 
 from embeddings.provider import BM25Provider, FastEmbedProvider
-from ingestion.ingest import clean_gitbook, derive_point_id, index_file, ingest, normalize_tables
+from ingestion.ingest import (
+    _build_breadcrumb,
+    _chunk_markdown,
+    _insert_annotation,
+    _is_code_heavy,
+    _merge_code_chunks,
+    clean_gitbook,
+    derive_point_id,
+    index_file,
+    ingest,
+    normalize_tables,
+    LLMCodeAnnotator,
+)
 from vector_store.qdrant_store import PINOT_DOCS_COLLECTION, ensure_collection, get_client
 
 _DENSE_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -158,6 +171,299 @@ class TestNormalizeTables:
         result = normalize_tables(text)
         assert "pinot.broker.timeoutMs: default 10 seconds." in result
         assert "| Offline | Deep store | Batch |" in result
+
+
+def _doc(content: str, **meta) -> Document:
+    """Convenience constructor for test Documents."""
+    return Document(page_content=content, metadata=meta)
+
+
+_PURE_CODE = "```json\n{\"dimensionsSplitOrder\": [\"Country\", \"Browser\"]}\n```"
+_PROSE_CONFIG = "The dimensionsSplitOrder field controls the split order of dimensions."
+_PROSE_OTHER = "Unsupported predicates cannot be used with the star-tree index."
+
+
+class TestIsCodeHeavy:
+    """Unit tests for _is_code_heavy: detect chunks whose content is mostly fenced code."""
+
+    def test_pure_code_block_is_heavy(self):
+        """Text entirely inside a fenced block exceeds the 0.5 threshold."""
+        assert _is_code_heavy(_PURE_CODE)
+
+    def test_pure_prose_is_not_heavy(self):
+        """Text with no fenced blocks is never code-heavy."""
+        assert not _is_code_heavy(_PROSE_CONFIG)
+
+    def test_empty_string_is_not_heavy(self):
+        """Empty text returns False (no characters, no code)."""
+        assert not _is_code_heavy("")
+
+    def test_majority_code_is_heavy(self):
+        """A short prose intro followed by a large code block crosses the threshold."""
+        text = "Short intro.\n\n```json\n" + ("x" * 200) + "\n```"
+        assert _is_code_heavy(text)
+
+    def test_majority_prose_is_not_heavy(self):
+        """A large prose block with a tiny code snippet stays below the threshold."""
+        text = ("A" * 200) + "\n\n```json\n{}\n```"
+        assert not _is_code_heavy(text)
+
+
+class TestMergeCodeChunks:
+    """Unit tests for _merge_code_chunks: semantic merging of code-heavy header splits."""
+
+    def test_no_code_chunks_returns_unchanged(self):
+        """A list with no code-heavy chunks is returned as-is."""
+        docs = [_doc(_PROSE_CONFIG), _doc(_PROSE_OTHER)]
+        result = _merge_code_chunks(docs)
+        assert len(result) == 2
+        assert result[0].page_content == _PROSE_CONFIG
+        assert result[1].page_content == _PROSE_OTHER
+
+    def test_empty_list_returned_unchanged(self):
+        """An empty input returns an empty list."""
+        assert _merge_code_chunks([]) == []
+
+    def test_all_code_chunks_returned_unchanged(self):
+        """When every chunk is code-heavy, nothing can be merged; return as-is."""
+        docs = [_doc(_PURE_CODE), _doc(_PURE_CODE)]
+        result = _merge_code_chunks(docs)
+        assert len(result) == 2
+
+    def test_code_chunk_merges_into_higher_overlap_prose(self):
+        """Code chunk merges into the prose chunk that shares more keyword tokens.
+
+        Simulates the q003 star-tree case: the Example JSON is adjacent to an
+        unrelated prose chunk but should merge into the configuration prose chunk
+        that shares identifiers with the code.
+        """
+        docs = [
+            _doc(_PROSE_OTHER),   # unrelated prose — no shared tokens with code
+            _doc(_PURE_CODE),     # code: dimensionsSplitOrder, Country, Browser
+            _doc(_PROSE_CONFIG),  # config prose: dimensionsSplitOrder — high overlap
+        ]
+        result = _merge_code_chunks(docs)
+        assert len(result) == 2
+        # Code should be appended to the config prose, not the unrelated prose
+        assert _PURE_CODE.rstrip() in result[1].page_content
+        assert _PURE_CODE.rstrip() not in result[0].page_content
+
+    def test_code_chunk_appended_to_previous_when_higher_overlap(self):
+        """Code chunk merges backward into the preceding prose when it has more overlap.
+
+        Simulates the q005 Kafka case: the JSON config follows the prose that
+        introduces it, so the previous chunk has higher keyword overlap.
+        """
+        kafka_prose = "Save the streamConfigs block to configure stream.kafka settings."
+        kafka_code = "```json\n{\"streamConfigs\": {\"stream.kafka.consumer.type\": \"lowlevel\"}}\n```"
+        unrelated_prose = "Verify that the ingestion pipeline is running correctly."
+        docs = [
+            _doc(kafka_prose),    # high overlap with kafka_code
+            _doc(kafka_code),     # code chunk
+            _doc(unrelated_prose),  # low overlap
+        ]
+        result = _merge_code_chunks(docs)
+        assert len(result) == 2
+        assert kafka_code.rstrip() in result[0].page_content
+        assert kafka_code.rstrip() not in result[1].page_content
+
+    def test_multiple_code_chunks_each_merged_into_best_prose(self):
+        """Two code chunks each merge into the prose chunk with the most overlap."""
+        kafka_code = "```json\n{\"streamConfigs\": {\"stream.kafka.topic\": \"events\"}}\n```"
+        star_tree_code = "```json\n{\"dimensionsSplitOrder\": [\"Country\"]}\n```"
+        kafka_prose = "The streamConfigs block controls stream.kafka connection settings."
+        star_tree_prose = "The dimensionsSplitOrder controls which dimensions are split."
+        docs = [
+            _doc(kafka_code),
+            _doc(star_tree_code),
+            _doc(kafka_prose),
+            _doc(star_tree_prose),
+        ]
+        result = _merge_code_chunks(docs)
+        assert len(result) == 2
+        kafka_result = next(d for d in result if "streamConfigs" in d.page_content and "```" in d.page_content)
+        star_result = next(d for d in result if "dimensionsSplitOrder" in d.page_content and "```" in d.page_content)
+        assert "stream.kafka.topic" in kafka_result.page_content
+        assert "Country" in star_result.page_content
+
+    def test_plain_column_values_do_not_drive_merge_target(self):
+        """Shared plain column values (Country, Browser) do not outscore config keys.
+
+        Validates the technical-token restriction: data-domain words that appear in
+        both a code block and an unrelated prose chunk (e.g. a tree-structure
+        visualization) must not redirect the merge away from the prose chunk that
+        shares actual config-key identifiers with the code.
+        """
+        plain_value_prose = "Country and Browser columns appear in the tree structure."
+        config_prose = "The dimensionsSplitOrder field defines the dimension split order."
+        # Code shares Country/Browser with plain_value_prose AND dimensionsSplitOrder
+        # with config_prose; only dimensionsSplitOrder is a technical identifier.
+        docs = [
+            _doc(plain_value_prose),
+            _doc(_PURE_CODE),
+            _doc(config_prose),
+        ]
+        result = _merge_code_chunks(docs)
+        assert len(result) == 2
+        # Code must merge into config_prose (has camelCase overlap), not plain_value_prose
+        assert "```json" not in result[0].page_content
+        assert "```json" in result[1].page_content
+        assert "dimensionsSplitOrder" in result[1].page_content
+
+    def test_prose_chunk_order_preserved(self):
+        """Prose chunks appear in their original document order after merging."""
+        docs = [
+            _doc("First prose chunk."),
+            _doc(_PURE_CODE),
+            _doc("Second prose chunk."),
+        ]
+        result = _merge_code_chunks(docs)
+        assert len(result) == 2
+        # Code is absorbed by one prose chunk; both prose chunks stay in original order
+        assert "First prose chunk." in result[0].page_content
+        assert "Second prose chunk." in result[1].page_content
+
+
+class TestBuildBreadcrumb:
+    """Unit tests for _build_breadcrumb: section context string from header metadata."""
+
+    def test_all_three_headers(self):
+        """h1, h2, h3 are joined with ' > '."""
+        meta = {"h1": "Star-tree index", "h2": "Star-tree solution", "h3": "Index generation configuration"}
+        assert _build_breadcrumb(meta) == "Star-tree index > Star-tree solution > Index generation configuration"
+
+    def test_missing_h3(self):
+        """Missing h3 is omitted; only h1 and h2 are joined."""
+        meta = {"h1": "Star-tree index", "h2": "Star-tree solution"}
+        assert _build_breadcrumb(meta) == "Star-tree index > Star-tree solution"
+
+    def test_only_h1(self):
+        """Only h1 present returns h1 without trailing separator."""
+        meta = {"h1": "Concepts"}
+        assert _build_breadcrumb(meta) == "Concepts"
+
+    def test_empty_metadata(self):
+        """Empty metadata returns an empty string."""
+        assert _build_breadcrumb({}) == ""
+
+    def test_empty_header_values_excluded(self):
+        """Headers with empty string values are not included in the breadcrumb."""
+        meta = {"h1": "Concepts", "h2": "", "h3": ""}
+        assert _build_breadcrumb(meta) == "Concepts"
+
+
+class TestInsertAnnotation:
+    """Unit tests for _insert_annotation: annotation placed between breadcrumb and body."""
+
+    def test_inserts_after_first_blank_line(self):
+        """Annotation is placed between the breadcrumb and the rest of the content."""
+        text = "Star-tree index > Configuration\n\nSome prose content."
+        annotation = "Description: Shows config. Question: How do you configure it?"
+        result = _insert_annotation(text, annotation)
+        assert result == (
+            "Star-tree index > Configuration\n\n"
+            "Description: Shows config. Question: How do you configure it?\n\n"
+            "Some prose content."
+        )
+
+    def test_no_blank_line_prepends_annotation(self):
+        """When there is no blank line, annotation is prepended to the full text."""
+        text = "No blank line here"
+        annotation = "Description: X. Question: Y?"
+        result = _insert_annotation(text, annotation)
+        assert result == "Description: X. Question: Y?\n\nNo blank line here"
+
+    def test_annotation_is_sandwiched_between_parts(self):
+        """Original breadcrumb and original body are preserved on either side."""
+        text = "Breadcrumb\n\nBody text."
+        annotation = "Description: D. Question: Q?"
+        result = _insert_annotation(text, annotation)
+        assert result == "Breadcrumb\n\nDescription: D. Question: Q?\n\nBody text."
+
+
+class _StubAnnotator:
+    """Stub annotator that returns a fixed annotation without calling any LLM."""
+
+    ANNOTATION = "Description: Code example.\nQuestion: How do you configure this?"
+
+    def annotate(self, chunk_text: str) -> str:
+        """Return a fixed annotation regardless of chunk content."""
+        return self.ANNOTATION
+
+
+class TestChunkMarkdownWithAnnotator:
+    """Unit tests for _chunk_markdown annotator integration."""
+
+    def test_annotation_inserted_into_code_heavy_chunks(self):
+        """Code-heavy chunks receive the annotation between breadcrumb and body."""
+        md = "# Indexing\n\n## Star-tree\n\nShort intro.\n\n```json\n" + ("x" * 300) + "\n```"
+        chunks = _chunk_markdown(md, annotator=_StubAnnotator())
+        code_heavy = [
+            c for c in chunks
+            if "```" in c.page_content and _StubAnnotator.ANNOTATION in c.page_content
+        ]
+        assert len(code_heavy) >= 1
+
+    def test_prose_chunks_not_annotated(self):
+        """Chunks with no fenced code blocks are not passed to the annotator."""
+        md = "# Concepts\n\n## Table\n\nApache Pinot has two main table types: offline and realtime."
+        chunks = _chunk_markdown(md, annotator=_StubAnnotator())
+        annotated = [c for c in chunks if _StubAnnotator.ANNOTATION in c.page_content]
+        assert len(annotated) == 0
+
+    def test_annotation_position_between_breadcrumb_and_body(self):
+        """Annotation appears after the breadcrumb and before the code content."""
+        md = "# Indexing\n\n## Star-tree\n\nIntro.\n\n```json\n" + ("x" * 300) + "\n```"
+        chunks = _chunk_markdown(md, annotator=_StubAnnotator())
+        for chunk in chunks:
+            if _StubAnnotator.ANNOTATION in chunk.page_content:
+                lines = chunk.page_content.split("\n\n")
+                # breadcrumb first, annotation second
+                assert "Indexing" in lines[0]
+                assert _StubAnnotator.ANNOTATION in lines[1]
+
+    def test_no_annotator_leaves_chunks_unchanged(self):
+        """When annotator=None, no annotation is inserted."""
+        md = "# Indexing\n\n## Star-tree\n\nIntro.\n\n```json\n" + ("x" * 300) + "\n```"
+        chunks = _chunk_markdown(md, annotator=None)
+        annotated = [c for c in chunks if "Description:" in c.page_content]
+        assert len(annotated) == 0
+
+
+class TestChunkMarkdownContextual:
+    """Unit tests for contextual chunking: breadcrumb is prepended to each chunk's text."""
+
+    def test_breadcrumb_prepended_to_chunks(self):
+        """Each chunk's page_content starts with the section breadcrumb."""
+        md = "# Star-tree index\n\n## Configuration\n\nSet dimensionsSplitOrder to define split order."
+        chunks = _chunk_markdown(md)
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.page_content.startswith("Star-tree index")
+
+    def test_breadcrumb_contains_h1_and_h2(self):
+        """Chunks from an h2 section have both h1 and h2 in the breadcrumb."""
+        md = "# Star-tree index\n\n## Configuration\n\nSet dimensionsSplitOrder to define split order."
+        chunks = _chunk_markdown(md)
+        assert any(
+            "Star-tree index > Configuration" in c.page_content for c in chunks
+        )
+
+    def test_original_content_preserved_after_breadcrumb(self):
+        """The original chunk text follows the breadcrumb, separated by a blank line."""
+        md = "# Concepts\n\n## Table\n\nApache Pinot has two main table types."
+        chunks = _chunk_markdown(md)
+        combined = " ".join(c.page_content for c in chunks)
+        assert "Apache Pinot has two main table types." in combined
+
+    def test_no_breadcrumb_for_empty_metadata(self):
+        """Chunks with no header metadata are returned without a breadcrumb prefix."""
+        # A markdown document with no headers produces chunks with empty metadata
+        md = "Plain text with no headers at all."
+        chunks = _chunk_markdown(md)
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.page_content == "Plain text with no headers at all."
 
 
 class TestDerivePointId:

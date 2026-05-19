@@ -376,15 +376,19 @@
           "scored_on": "2026-05-16T13:18:48-0700"
         },
         "sommelier (claude-haiku-4-5)": {
-          "answer": "The default query port for the Pinot broker is **8099**, controlled by the configuration property `pinot.broker.client.queryPort` [1].\n\nHowever, note that this property is **deprecated**. The recommended approach is to use the newer properties instead [1]:\n\n- `pinot.broker.client.access.protocols.http.port` \u2014 for HTTP queries\n- `pinot.broker.client.access.protocols.https.port` \u2014 for HTTPS queries\n- `pinot.broker.grpc.port` \u2014 for gRPC queries\n\nYou should also set `pinot.broker.client.access.protocols` to specify which protocols to enable (e.g., `http` or `https` or `http,https`) [1].\n\n**Sources**\n\n1. reference/configuration-reference/broker.md \u2014 Broker",
+          "answer": "The default HTTP port for the Pinot broker is **8099** [1].\n\nThe configuration property that controls it is **`controller.port`** [1]. However, note that this is a legacy property name. According to the documentation, existing properties like `controller.port` are automatically translated to HTTP listener configuration for backwards-compatibility [1]. For new configurations using the listener-based approach, you would configure HTTP ingress through the newer listener specifications rather than the legacy port property.\n\nIf you need to adjust HTTP header limits on the broker's Grizzly HTTP listener, you can use the companion settings `pinot.broker.http.server.max.http.header.size` (in bytes) and `pinot.broker.http.server.max.request.headers` (header count) [1].\n\n**Sources**\n\n1. operate-pinot/configuring-tls-ssl.md — Configuring TLS/SSL > Listeners",
+          "answer_corrected": "The default query port for the Pinot broker is **8099**, controlled by the configuration property `pinot.broker.client.queryPort` [1].\n\nHowever, note that this property is **deprecated**. The recommended approach is to use the newer properties instead [1]:\n\n- `pinot.broker.client.access.protocols.http.port` \u2014 for HTTP queries\n- `pinot.broker.client.access.protocols.https.port` \u2014 for HTTPS queries\n- `pinot.broker.grpc.port` \u2014 for gRPC queries\n\nYou should also set `pinot.broker.client.access.protocols` to specify which protocols to enable (e.g., `http` or `https` or `http,https`) [1].\n\n**Sources**\n\n1. reference/configuration-reference/broker.md \u2014 Broker",
           "scores": {
-            "accuracy": 1,
+            "accuracy": 0,
+            "accuracy_corrected": 1,
             "completeness": 1,
             "citations": 1,
-            "total": 3
+            "total": 2,
+            "total_corrected": 3
           },
           "scored_by": "Robert Zych",
-          "scored_on": "2026-05-16T17:00:00-0700"
+          "scored_on": "2026-05-14T17:00:00-0700",
+          "scored_on_corrected": "2026-05-16T17:00:00-0700"
         }
       }
     },

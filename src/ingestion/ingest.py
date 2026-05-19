@@ -15,6 +15,7 @@ _HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
 _GITBOOK_TAG = re.compile(r"\{%.*?%\}", re.DOTALL)
 _EXCESS_BLANKS = re.compile(r"\n{3,}")
 _TABLE_SEP_CELL = re.compile(r"^[-: ]+$")
+_CODE_TOKEN_RE = re.compile(r"[^a-zA-Z0-9_.]")
 
 
 def clean_gitbook(text: str) -> str:
@@ -93,7 +94,153 @@ def derive_point_id(chunk_text: str) -> uuid.UUID:
     return uuid.UUID(bytes=digest)
 
 
-def _chunk_markdown(raw_markdown: str):
+def _is_code_heavy(text: str, threshold: float = 0.5) -> bool:
+    """Return True if the majority of text falls within fenced code blocks.
+
+    Counts characters on lines inside ``` fences and divides by total length.
+    Used to detect example/config sections that are almost entirely code and
+    would score poorly in retrieval without surrounding prose context.
+    """
+    in_fence = False
+    code_chars = 0
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            code_chars += len(line) + 1
+    total = len(text)
+    return total > 0 and code_chars / total >= threshold
+
+
+def _code_tokens(text: str) -> set[str]:
+    """Extract technical identifiers for overlap scoring.
+
+    Restricts to camelCase, underscore, or dotted tokens (config keys, class names,
+    property paths). Plain column values like 'Country' or 'Browser' are excluded so
+    that shared data-domain vocabulary does not outscore config-key matches when
+    choosing which prose chunk to merge a code block into.
+    """
+    return {
+        t for t in _CODE_TOKEN_RE.split(text)
+        if len(t) > 3 and ("_" in t or "." in t or any(c.isupper() for c in t[1:]))
+    }
+
+
+def _merge_code_chunks(docs: list) -> list:
+    """Merge each code-heavy chunk into the prose chunk with the highest keyword overlap.
+
+    Searches the full document — not just neighbors — to find the best prose target
+    for each code-heavy chunk. This handles examples that appear multiple header
+    sections away from the prose that introduces them (e.g., a standalone Example
+    section whose JSON uses identifiers defined in a distant configuration section).
+    Code content is appended to the target prose chunk in document order; prose chunk
+    order is preserved. If all chunks are code-heavy, they are returned unchanged.
+    """
+    if not docs:
+        return docs
+
+    # Identify which chunks are code-heavy and which are prose
+    code_set = {i for i, doc in enumerate(docs) if _is_code_heavy(doc.page_content)}
+    if not code_set:
+        return docs
+
+    prose_indices = [i for i in range(len(docs)) if i not in code_set]
+    if not prose_indices:
+        return docs
+
+    # Pre-compute token sets for all prose chunks before any mutation
+    prose_tokens = {i: _code_tokens(docs[i].page_content) for i in prose_indices}
+
+    # Assign each code chunk to the prose chunk with the most shared technical tokens.
+    # `code_toks & prose_tokens[pi]` is the set intersection — technical identifiers
+    # (camelCase, underscore, dotted) that appear in both chunks. `len(...)` converts
+    # that to a count; max() selects the prose chunk with the largest overlap count.
+    appended: dict[int, list[str]] = {}
+    for ci in sorted(code_set):
+        code_toks = _code_tokens(docs[ci].page_content)
+        target = max(prose_indices, key=lambda pi: len(code_toks & prose_tokens[pi]))
+        appended.setdefault(target, []).append(docs[ci].page_content)
+
+    # Rebuild the chunk list: prose only, each with its assigned code appended
+    result = []
+    for i, doc in enumerate(docs):
+        if i in code_set:
+            continue
+        if i in appended:
+            doc.page_content = doc.page_content.rstrip() + "\n\n" + "\n\n".join(
+                c.rstrip() for c in appended[i]
+            )
+        result.append(doc)
+
+    return result
+
+
+def _build_breadcrumb(metadata: dict) -> str:
+    """Return a section breadcrumb string from header metadata, e.g. 'H1 > H2 > H3'."""
+    parts = [metadata[k] for k in ("h1", "h2", "h3") if metadata.get(k)]
+    return " > ".join(parts)
+
+
+_ANNOTATION_PROMPT = """\
+You are annotating a technical documentation chunk for search retrieval.
+
+The chunk below is from Apache Pinot documentation and contains a code example.
+Generate one sentence describing what this code demonstrates and one natural-language \
+question that this code directly answers.
+
+Chunk:
+{chunk_text}
+
+Respond with exactly two lines and no other text:
+Description: <one sentence>
+Question: <one question>"""
+
+
+class LLMCodeAnnotator:
+    """Generates a Description+Question annotation for code-heavy chunks via LLM.
+
+    The annotation is inserted between the breadcrumb and the chunk body so the
+    cross-encoder reranker immediately sees natural-language signal about the code's
+    purpose, rather than having to infer it from dense table rows or code syntax.
+    """
+
+    def __init__(self, model: str, api_key: str = "") -> None:
+        self._model = model
+        self._api_key = api_key
+
+    def annotate(self, chunk_text: str) -> str:
+        """Return 'Description: ...\\nQuestion: ...' or empty string on failure."""
+        import litellm
+
+        prompt = _ANNOTATION_PROMPT.format(chunk_text=chunk_text[:3000])
+        kwargs: dict = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": 120,
+        }
+        if self._api_key:
+            kwargs["api_key"] = self._api_key
+        try:
+            response = litellm.completion(**kwargs)
+            text = response.choices[0].message.content.strip()
+            if "Description:" in text and "Question:" in text:
+                return text
+        except Exception:
+            pass
+        return ""
+
+
+def _insert_annotation(text: str, annotation: str) -> str:
+    """Insert annotation between the breadcrumb line and the rest of the chunk body."""
+    parts = text.split("\n\n", 1)
+    if len(parts) == 2:
+        return parts[0] + "\n\n" + annotation + "\n\n" + parts[1]
+    return annotation + "\n\n" + text
+
+
+def _chunk_markdown(raw_markdown: str, annotator: "LLMCodeAnnotator | None" = None):
     """Clean and split a markdown document into header-aware, size-bounded chunks."""
     md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS)
     cleaned = normalize_tables(clean_gitbook(raw_markdown))
@@ -101,7 +248,26 @@ def _chunk_markdown(raw_markdown: str):
     char_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
         chunk_size=512, chunk_overlap=50
     )
-    return char_splitter.split_documents(header_splits)
+    char_splits = char_splitter.split_documents(header_splits)
+
+    # Prepend section breadcrumb to each chunk so BM25 and dense embeddings see
+    # document context that is otherwise only stored in metadata fields.
+    for doc in char_splits:
+        breadcrumb = _build_breadcrumb(doc.metadata)
+        if breadcrumb:
+            doc.page_content = breadcrumb + "\n\n" + doc.page_content
+
+    # For code-heavy chunks, generate a natural-language description and question
+    # via LLM and insert them after the breadcrumb so the cross-encoder reranker
+    # immediately sees signal about the code's purpose.
+    if annotator is not None:
+        for doc in char_splits:
+            if _is_code_heavy(doc.page_content):
+                annotation = annotator.annotate(doc.page_content)
+                if annotation:
+                    doc.page_content = _insert_annotation(doc.page_content, annotation)
+
+    return char_splits
 
 
 def index_file(
@@ -112,6 +278,7 @@ def index_file(
     dense_provider: DenseEmbeddingProvider,
     sparse_provider: SparseEmbeddingProvider,
     pinot_version: str,
+    annotator: "LLMCodeAnnotator | None" = None,
 ) -> dict:
     """Incrementally index one markdown file into Qdrant.
 
@@ -120,7 +287,7 @@ def index_file(
 
     Returns a dict with keys: inserted, deleted, skipped, errors.
     """
-    chunks = _chunk_markdown(raw_markdown)
+    chunks = _chunk_markdown(raw_markdown, annotator=annotator)
     chunk_texts = [c.page_content for c in chunks]
 
     new_points = {derive_point_id(t): (t, c) for t, c in zip(chunk_texts, chunks)}
@@ -210,6 +377,16 @@ def ingest(
     dense_provider = get_dense_provider(config)
     sparse_provider = get_sparse_provider()
 
+    inf = getattr(config, "inference", None)
+    annotator = (
+        LLMCodeAnnotator(
+            model=inf.model,
+            api_key=getattr(inf, "api_key", ""),
+        )
+        if inf is not None
+        else None
+    )
+
     docs_root = pathlib.Path(docs_path).resolve()
 
     for md_file in sorted(docs_root.rglob("*.md")):
@@ -232,6 +409,7 @@ def ingest(
                 dense_provider=dense_provider,
                 sparse_provider=sparse_provider,
                 pinot_version=pinot_version,
+                annotator=annotator,
             )
             tracer.emit("ingestion", stats)
         except Exception as e:
