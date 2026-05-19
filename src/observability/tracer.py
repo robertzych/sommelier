@@ -1,23 +1,17 @@
+import hashlib
 import pathlib
-import subprocess
 import time
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent.parent
+_SYSTEM_PROMPT_PATH = _REPO_ROOT / "prompts" / "system_prompt.md"
 
 
 def _get_prompt_version() -> str:
     try:
-        result = subprocess.run(
-            ["git", "log", "-1", "--format=%H", "--", "prompts/system_prompt.md"],
-            capture_output=True,
-            text=True,
-            cwd=_REPO_ROOT,
-        )
-        commit = result.stdout.strip()
-        return commit[:7] if commit else "unknown"
+        content = _SYSTEM_PROMPT_PATH.read_bytes()
+        return hashlib.sha256(content).hexdigest()[:7]
     except Exception:
         return "unknown"
 

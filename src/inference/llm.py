@@ -18,20 +18,19 @@ def build_user_message(
     pinot_version: str | None,
 ) -> str:
     """Build the user message from reranked chunks, query, and optional version."""
-    parts = ["Context from Apache Pinot documentation:\n"]
-    for i, chunk in enumerate(chunks, 1):
+    chunk_parts = []
+    for chunk in chunks:
         payload = chunk.payload or {}
         file_path = payload.get("file_path", "")
         headers = [payload.get(h, "") for h in ("h1", "h2", "h3")]
         breadcrumb = " > ".join(h for h in headers if h)
-        header_line = f"[{i}] {file_path}"
-        if breadcrumb:
-            header_line += f" — {breadcrumb}"
-        parts.append(f"{header_line}\n{payload.get('text', '')}\n")
+        header_line = f"{file_path} — {breadcrumb}" if breadcrumb else file_path
+        chunk_parts.append(f"{header_line}\n{payload.get('text', '')}")
 
-    parts.append(f"Pinot version: {pinot_version or 'latest'}")
-    parts.append(f"Question: {query}")
-    return "\n".join(parts)
+    context = "\n\n---\n\n".join(chunk_parts)
+    header = "Context from Apache Pinot documentation:"
+    body = f"{header}\n\n{context}" if context else header
+    return f"{body}\n\nPinot version: {pinot_version or 'latest'}\nQuestion: {query}"
 
 
 def complete(

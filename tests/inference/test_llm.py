@@ -59,12 +59,13 @@ class TestBuildUserMessage:
         msg = build_user_message([], "query", None)
         assert "Pinot version: latest" in msg
 
-    def test_chunk_index_is_one_based(self):
-        """Two chunks are numbered [1] and [2]."""
+    def test_chunks_separated_by_horizontal_rule_and_not_numbered(self):
+        """Two chunks are separated by '---' and carry no [N] reference numbers."""
         chunks = [_make_chunk("first"), _make_chunk("second")]
         msg = build_user_message(chunks, "q", None)
-        assert "[1]" in msg
-        assert "[2]" in msg
+        assert "---" in msg
+        assert "[1]" not in msg
+        assert "[2]" not in msg
 
     def test_chunk_with_all_headers_builds_full_breadcrumb(self):
         """A chunk with h1, h2, h3 produces 'h1 > h2 > h3' in the header line."""
