@@ -2,8 +2,9 @@
 
 Skips questions where all three baselines are already fully scored.
 Saves scores to golden_set.json after each baseline is completed.
-Run from the repo root: uv run python evals/score_review.py
+Run from the repo root: uv run python evals/score_review.py [--file evals/golden_set_regrade.json]
 """
+import argparse
 import json
 import os
 import sys
@@ -108,6 +109,12 @@ def review_question(q: dict, gs: dict, index: int, total_pending: int) -> None:
 
 
 def main() -> None:
+    global GOLDEN_SET_PATH
+    parser = argparse.ArgumentParser(description="Interactive golden set scorer")
+    parser.add_argument("--file", default=GOLDEN_SET_PATH, help="Path to golden set JSON file")
+    args = parser.parse_args()
+    GOLDEN_SET_PATH = args.file
+
     gs = load()
     questions = gs["questions"]
     pending = [q for q in questions if not is_scored(q)]

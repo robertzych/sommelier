@@ -1,0 +1,1080 @@
+{
+  "version": "1.0",
+  "questions": [
+    {
+      "id": "q001",
+      "question": "How do you configure upsert on a Pinot real-time table?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "build-with-pinot/ingestion/upsert-and-dedup/upsert.md"
+      ],
+      "baseline_responses": {
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Upserts in Pinot are configured in the table config under the upsertConfig block. Here's a rundown:\n\nRequired setup\n\n1. Table type must be REALTIME \u2014 upserts are not supported on offline tables.\n\n2. Primary key \u2014 define it in the schema:\n\"primaryKeyColumns\": [\"userId\"]\n\n3. upsertConfig in table config:\n\"upsertConfig\": {\n  \"mode\": \"FULL\"\n}\n\nSupported modes:\n- FULL \u2014 replaces the entire record on update\n- PARTIAL \u2014 merges specific columns; requires partialUpsertStrategies per column\n\n4. Comparison column \u2014 Pinot needs to know which record is \"newer\". Defaults to the table's timeColumnName, but can be overridden:\n\"upsertConfig\": {\n  \"mode\": \"FULL\",\n  \"comparisonColumn\": \"eventTimestamp\"\n}\n\n5. Routing must be partition-based \u2014 all segments for a given primary key must land on the same server. This requires:\n- Kafka topic partitioned by the primary key\n- replicaGroupStrategyConfig in the instanceAssignmentConfigMap\n- partitionedReplicaGroup routing strategy in routingConfig\n\nPartial upsert example\n\n\"upsertConfig\": {\n  \"mode\": \"PARTIAL\",\n  \"partialUpsertStrategies\": {\n    \"score\": \"MAX\",\n    \"lastSeen\": \"OVERWRITE\",\n    \"eventCount\": \"INCREMENT\"\n  },\n  \"defaultPartialUpsertStrategy\": \"OVERWRITE\"\n}\n\nBuilt-in partial strategies include OVERWRITE, MAX, MIN, INCREMENT, APPEND, and UNION.\n\nKey constraints\n\n- Star-tree index is incompatible with upsert tables.\n- null handling for the comparison column needs care \u2014 Pinot's behavior can vary by version.\n- Upsert metadata is in-memory, so server restarts trigger a full segment scan to rebuild it (can be slow for large tables).",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T10:00:00-0700"
+        },
+        "docs_pinot_ai": {
+          "answer": "Configure upsert on a REALTIME table by setting a primary key in the schema, then enabling upsertConfig in the table config. Pinot supports FULL and PARTIAL upsert for real-time tables. See Stream Ingestion with Upsert.\n\nDefine the primary key\n\n{\n  \"schemaName\": \"orders\",\n  \"primaryKeyColumns\": [\"order_id\"]\n}\n\nEnable upsert on the real-time table\n\n{\n  \"tableName\": \"orders_REALTIME\",\n  \"tableType\": \"REALTIME\",\n  \"segmentsConfig\": {\n    \"timeColumnName\": \"event_time\",\n    \"retentionTimeUnit\": \"DAYS\",\n    \"retentionTimeValue\": \"30\",\n    \"replication\": \"1\"\n  },\n  \"upsertConfig\": {\n    \"mode\": \"FULL\",\n    \"comparisonColumns\": [\"event_time\"]\n  },\n  \"routing\": {\n    \"instanceSelectorType\": \"strictReplicaGroup\"\n  }\n}\n\nPartition the input stream by primary key. Pinot requires all events for the same primary key to land on the same partition. Use a low-level consumer and partition the stream by the primary key. The docs call out strictReplicaGroup routing for upsert tables.\n\nFor partial upsert, set mode to PARTIAL, add partialUpsertStrategies, and enable null handling:\n\n\"tableIndexConfig\": { \"nullHandlingEnabled\": true }\n\nKey rules:\n- primaryKeyColumns is required.\n- comparisonColumns decides which record wins.\n- If omitted, Pinot uses the table time column as the comparison column.\n- For partial upsert, define strategies like OVERWRITE, INCREMENT, or IGNORE.\n\nSources: Offline Table Upsert, Stream Ingestion with Upsert, CDC / Upsert Pipeline, Real-Time, Hybrid Real-Time + Offline, Table Configuration, Segment Compaction on Upserts, Real-Time Product Analytics, Table",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T10:00:00-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Configuring Upsert on a Pinot Real-Time Table\n\nTo enable upsert on a REALTIME table, add the `upsertConfig` section to your table configuration with the following key settings:\n\n```json\n{\n  \"tableName\": \"your_table_name\",\n  \"tableType\": \"REALTIME\",\n  \"upsertConfig\": {\n    \"mode\": \"FULL\",\n    \"snapshot\": \"ENABLE\",\n    \"preload\": \"ENABLE\"\n  }\n}\n```\n\n### Key Configuration Parameters\n\n- **`mode`**: Set to `FULL` for full upserts (replaces entire row) or `PARTIAL` for partial upserts (updates only specified columns).\n- **`snapshot`**: Set to `ENABLE` to enable snapshot recovery, which allows the table to recover from failures.\n- **`preload`**: Set to `ENABLE` to preload snapshot data on server startup.\n- **`comparisonColumns`** (optional): Specify which columns determine whether a record should be updated. For example, `[\"updatedAt\"]` uses the timestamp to decide if an incoming record is newer.\n- **`hashFunction`** (optional): Set to `MURMUR3` for hash-based deduplication.\n\n### Complete Example with Partition-Based Routing\n\nFor optimal performance with upserts, configure partition-based routing:\n\n```json\n{\n  \"tableName\": \"upsertMeetupRsvp\",\n  \"tableType\": \"REALTIME\",\n  \"segmentsConfig\": {\n    \"timeColumnName\": \"mtime\",\n    \"retentionTimeUnit\": \"DAYS\",\n    \"retentionTimeValue\": \"1\",\n    \"replication\": \"1\"\n  },\n  \"tableIndexConfig\": {\n    \"segmentPartitionConfig\": {\n      \"columnPartitionMap\": {\n        \"event_id\": {\n          \"functionName\": \"Hashcode\",\n          \"numPartitions\": 2\n        }\n      }\n    }\n  },\n  \"instanceAssignmentConfigMap\": {\n    \"CONSUMING\": {\n      \"tagPoolConfig\": {\n        \"tag\": \"DefaultTenant_REALTIME\"\n      },\n      \"replicaGroupPartitionConfig\": {\n        \"replicaGroupBased\": true,\n        \"numReplicaGroups\": 1,\n        \"partitionColumn\": \"event_id\",\n        \"numPartitions\": 2,\n        \"numInstancesPerPartition\": 1\n      }\n    }\n  },\n  \"routing\": {\n    \"segmentPrunerTypes\": [\"partition\"],\n    \"instanceSelectorType\": \"strictReplicaGroup\"\n  },\n  \"upsertConfig\": {\n    \"mode\": \"FULL\",\n    \"snapshot\": \"ENABLE\",\n    \"preload\": \"ENABLE\"\n  }\n}\n```\n\n### Optional: Configure UpsertCompactMergeTask\n\nTo automatically compact and merge segments in your upsert table, add the task configuration and enable PinotTaskManager on your controller:\n\n**Table configuration:**\n```json\n\"task\": {\n  \"taskTypeConfigsMap\": {\n    \"UpsertCompactMergeTask\": {\n      \"schedule\": \"0 */6 * ? * *\",\n      \"bufferTimePeriod\": \"2d\",\n      \"maxNumRecordsPerSegment\": \"5000000\",\n      \"maxNumRecordsPerTask\": \"50000000\",\n      \"maxNumSegmentsPerTask\": \"10\",\n      \"outputSegmentMaxSize\": \"200MB\",\n      \"numSegmentsBatchPerServerRequest\": \"500\"\n    }\n  }\n}\n```\n\n**Controller configuration:**\n```\ncontroller.task.scheduler.enabled=true\ncontroller.task.frequencyPeriod=1h\n```\n\nThen restart the controller.\n\n---\n\n**Sources**\n\n- build-with-pinot/ingestion/upsert-and-dedup/upsert.md \u2014 Upsert > Enable upserts in Pinot > Example\n- build-with-pinot/ingestion/upsert-and-dedup/upsert.md \u2014 Upsert > Quick Start\n- operate-pinot/upsert-compact-merge-task.md \u2014 Upsert Compact Merge Task > Configuration\n- playbooks/cdc-upsert-pipeline.md \u2014 CDC / Upsert Pipeline > Table configuration",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:18:01-0700"
+        }
+      }
+    },
+    {
+      "id": "q002",
+      "question": "How do you enable upsert segment compaction on a Pinot real-time table?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "build-with-pinot/ingestion/upsert-and-dedup/segment-compaction-on-upserts.md"
+      ],
+      "baseline_responses": {
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Upsert segment compaction removes stale/superseded records from completed segments, reducing storage\n  and improving query performance.\n\n  How to enable it\n\n  Add compactionConfig inside upsertConfig:\n\n  \"upsertConfig\": {\n    \"mode\": \"FULL\",\n    \"compactionConfig\": {\n      \"initialDelayInMs\": 300000,\n      \"waitForAllSegmentsLoaded\": true\n    }\n  }\n\n  This triggers a minion task (UpsertCompactionTask) that rewrites completed segments, keeping only the\n  winning (latest) record per primary key.\n\n  Minion task config\n\n  You also need to register the task in taskConfig so the Pinot Minion picks it up:\n\n  \"task\": {\n    \"taskTypeConfigsMap\": {\n      \"UpsertCompactionTask\": {\n        \"schedule\": \"0 */3 * * * ?\",\n        \"maxNumTasksPerMinionInstance\": 1\n      }\n    }\n  }\n\n  Key config options in compactionConfig\n\n  Field: initialDelayInMs\n  Description: Delay before compaction starts after a segment is completed\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Field: waitForAllSegmentsLoaded\n  Description: Wait until all segments are loaded before compacting (recommended: true)\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Field: maxNumRecordsPerSegment\n  Description: Target max records per output segment\n\n  Important caveats\n\n  - Only completed (immutable) segments are compacted \u2014 the consuming segment is never touched.\n  - A Minion component must be deployed and running in your cluster.\n  - Compaction rewrites segments on the deep store and updates the segment lineage in ZooKeeper \u2014 old\n  segments are replaced atomically.\n  - After compaction, servers reload the new segments, which temporarily increases memory pressure.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 0,
+            "citations": 0,
+            "total": 0
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T10:00:00-0700"
+        },
+        "docs_pinot_ai": {
+          "answer": "Enable the UpsertCompactionTask on your REALTIME upsert table, and make sure task scheduling is on.\n\nStart a Pinot Minion.\n\nEnable controller task scheduling and restart the controller:\n\ncontroller.task.scheduler.enabled=true\ncontroller.task.frequencyPeriod=1h\n\nAdd the task config to the table:\n\n{\n  \"task\": {\n    \"taskTypeConfigsMap\": {\n      \"UpsertCompactionTask\": {\n        \"schedule\": \"0 */5 * ? * *\",\n        \"bufferTimePeriod\": \"7d\",\n        \"invalidRecordsThresholdPercent\": \"30\",\n        \"invalidRecordsThresholdCount\": \"100000\",\n        \"tableMaxNumTasks\": \"100\",\n        \"validDocIdsType\": \"SNAPSHOT\"\n      }\n    }\n  }\n}\n\nA few key points:\n- bufferTimePeriod controls how long Pinot waits after a segment completes. Set it to 0d to compact immediately after completion.\n- invalidRecordsThresholdPercent and invalidRecordsThresholdCount limit when a completed segment becomes eligible.\n- validDocIdsType can be SNAPSHOT, IN_MEMORY, or IN_MEMORY_WITH_DELETE. SNAPSHOT requires upsertConfig.snapshot not to be DISABLE.\n\nSources: Segment Compaction on Upserts, Upsert Compaction Task, Upsert Compact Merge Task, CDC / Upsert Pipeline, Upsert Merge Compact Task, Stream Ingestion with Upsert, Offline Table Upsert, Real-Time, Segment Management, Upgrade Notes",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T10:00:00-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "# Enabling Upsert Segment Compaction on a Real-Time Table\n\nThere are two complementary approaches to compact segments in upsert-enabled real-time tables:\n\n## 1. UpsertCompactionTask (Individual Segment Compaction)\n\nThis task compacts individual completed segments by removing invalid records.\n\n**Prerequisites:**\n- Task scheduling must be enabled\n- A Pinot Minion must be available\n\n**Configuration:**\n\nAdd the following to your table configuration:\n\n```json\n\"task\": {\n  \"taskTypeConfigsMap\": {\n    \"UpsertCompactionTask\": {\n      \"schedule\": \"0 */5 * ? * *\",\n      \"bufferTimePeriod\": \"7d\",\n      \"invalidRecordsThresholdPercent\": \"30\",\n      \"invalidRecordsThresholdCount\": \"100000\",\n      \"tableMaxNumTasks\": \"100\",\n      \"validDocIdsType\": \"SNAPSHOT\"\n    }\n  }\n}\n```\n\n**Key parameters:**\n\n- `schedule`: Cron expression for task scheduling (example: every 5 minutes)\n- `bufferTimePeriod`: Delay before compacting a completed segment. Set to `\"0d\"` for immediate compaction, or specify days (e.g., `\"7d\"`)\n- `invalidRecordsThresholdPercent` (optional): Compact segments when old records exceed this percentage of total records\n- `invalidRecordsThresholdCount` (optional): Compact segments when old records exceed this count\n- `tableMaxNumTasks` (optional): Maximum number of concurrent compaction tasks\n- `validDocIdsType` (optional): Source of valid document IDs \u2014 use `SNAPSHOT` (default), `IN_MEMORY`, or `IN_MEMORY_WITH_DELETE`\n\n## 2. UpsertCompactMergeTask (Small Segment Merger)\n\nThis task merges multiple small segments into larger ones, reducing segment proliferation. **New in Pinot 1.3.0.**\n\n**Prerequisites:**\n- A Pinot Minion must be running\n- Snapshot recovery must be enabled in upsert config\n- PinotTaskManager must be enabled on the controller\n\n**Configuration:**\n\nAdd to your REALTIME table configuration:\n\n```json\n\"task\": {\n  \"taskTypeConfigsMap\": {\n    \"UpsertCompactMergeTask\": {\n      \"schedule\": \"0 */6 * ? * *\",\n      \"bufferTimePeriod\": \"2d\",\n      \"maxNumRecordsPerSegment\": \"5000000\",\n      \"maxNumRecordsPerTask\": \"50000000\",\n      \"maxNumSegmentsPerTask\": \"10\",\n      \"outputSegmentMaxSize\": \"200MB\",\n      \"numSegmentsBatchPerServerRequest\": \"500\"\n    }\n  }\n}\n```\n\nEnsure your upsert config has snapshot recovery enabled:\n\n```json\n\"upsertConfig\": {\n  \"mode\": \"FULL\",\n  \"snapshot\": \"ENABLE\"\n}\n```\n\nEnable PinotTaskManager on the controller by adding to your controller configuration:\n\n```\ncontroller.task.scheduler.enabled=true\ncontroller.task.frequencyPeriod=1h\n```\n\nThen restart the controller.\n\n## 3. Commit Time Compaction (Optional Optimization)\n\nFor additional performance, enable commit time compaction to remove invalid records during segment commit itself:\n\n```json\n\"upsertConfig\": {\n  \"mode\": \"FULL\",\n  \"enableCommitTimeCompaction\": true\n}\n```\n\nThis reduces storage bloat immediately without requiring minion tasks.\n\n---\n\n**Sources**\n\n- build-with-pinot/ingestion/upsert-and-dedup/segment-compaction-on-upserts.md \u2014 Segment compaction on upserts > Compact segments on upserts in a real-time table\n- operate-pinot/upsert-compact-merge-task.md \u2014 Upsert Compact Merge Task > Configuration\n- build-with-pinot/ingestion/upsert-and-dedup/upsert.md \u2014 Upsert > Enable upserts in Pinot > Enable preload for faster server restarts",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:20:09-0700"
+        }
+      }
+    },
+    {
+      "id": "q003",
+      "question": "How do you configure a star-tree index in Pinot?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "build-with-pinot/indexing/star-tree-index.md"
+      ],
+      "baseline_responses": {
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Star-tree indexes are configured in the table config under fieldConfigList or the older\n  starTreeIndexConfigs block in indexingConfig.\n\n  Configuration (modern approach)\n\n  In indexingConfig:\n\n  \"indexingConfig\": {\n    \"starTreeIndexConfigs\": [\n      {\n        \"dimensionsSplitOrder\": [\"country\", \"deviceType\", \"browser\"],\n        \"skipStarNodeCreationForDimensions\": [],\n        \"functionColumnPairs\": [\"SUM__revenue\", \"COUNT__*\", \"MAX__latency\"],\n        \"maxLeafRecords\": 10000\n      }\n    ],\n    \"enableDefaultStarTree\": false\n  }\n\n  Key fields\n\n  Field: dimensionsSplitOrder\n  Description: Ordered list of dimensions to split on \u2014 most selective/common filter first\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Field: functionColumnPairs\n  Description: Pre-aggregated metrics; format is FUNCTION__column (COUNT__* for count)\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Field: maxLeafRecords\n  Description: Max records in a leaf node before splitting stops (default: 10000)\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Field: skipStarNodeCreationForDimensions\n  Description: Dimensions where star nodes are skipped (high-cardinality dims)\n\n  Supported aggregation functions\n\n  SUM, MIN, MAX, COUNT, AVG (stored as sum+count internally)\n\n  Multiple star-tree indexes\n\n  You can define more than one to serve different query patterns:\n\n  \"starTreeIndexConfigs\": [\n    {\n      \"dimensionsSplitOrder\": [\"country\", \"deviceType\"],\n      \"functionColumnPairs\": [\"SUM__revenue\"],\n      \"maxLeafRecords\": 10000\n    },\n    {\n      \"dimensionsSplitOrder\": [\"browser\", \"os\"],\n      \"functionColumnPairs\": [\"COUNT__*\", \"MAX__latency\"],\n      \"maxLeafRecords\": 5000\n    }\n  ]\n\n  Important constraints\n\n  - Only works on offline and hybrid tables \u2014 incompatible with upsert tables.\n  - Only applies to immutable segments \u2014 not the consuming segment on real-time tables.\n  - Rebuilding a star-tree requires a segment reload or re-push; it's not updated incrementally.\n  - Dimensions must be low-to-medium cardinality to be effective \u2014 high-cardinality dimensions should go\n   in skipStarNodeCreationForDimensions or be omitted.\n\n  When it helps\n\n  Queries with GROUP BY + aggregation + filters on the split dimensions will hit the star-tree instead\n  of scanning raw records, often giving order-of-magnitude speedups.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T11:48:41-0700"
+        },
+        "docs_pinot_ai": {
+          "answer": "Configure it in the table config under tableIndexConfig.\n\nUse starTreeIndexConfigs for explicit control.\n\nOr set enableDefaultStarTree: true for Pinot's default configuration.\n\nNew segments get the index. Existing segments do not.\n\nA minimal config looks like this:\n\n{\n  \"tableIndexConfig\": {\n    \"starTreeIndexConfigs\": [\n      {\n        \"dimensionsSplitOrder\": [\"Country\", \"Browser\", \"Locale\"],\n        \"skipStarNodeCreationForDimensions\": [],\n        \"functionColumnPairs\": [\"SUM__Impressions\"],\n        \"maxLeafRecords\": 1\n      }\n    ]\n  }\n}\n\nYou can also use aggregationConfigs instead of functionColumnPairs:\n\n\"aggregationConfigs\": [\n  {\n    \"columnName\": \"Impressions\",\n    \"aggregationFunction\": \"SUM\",\n    \"compressionCodec\": \"LZ4\"\n  }\n]\n\nKey rules:\n- Put all filter, group-by, and aggregation columns used by matching queries into dimensionsSplitOrder.\n- Star-tree dimension columns must be dictionary-encoded.\n- maxLeafRecords defaults to 10000.\n- skipStarNodeCreationForDimensions is optional.\n- enableDefaultStarTree builds a default index from: all dictionary-encoded single-value dimensions with cardinality <= 10000, dictionary-encoded time/date-time columns, COUNT(*) and SUM for numeric metrics.\n\nSources: Style Guide, Star-Tree Index, Monitoring Metrics, Troubleshooting, Use S3 as Deep Storage for Pinot, Ingestion FAQ, Components, Configure Indexes, Overview, Trino",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T10:00:00-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "# Configuring a Star-Tree Index in Apache Pinot\n\nA star-tree index is configured in the table configuration under `tableIndexConfig` \u2192 `starTreeIndexConfigs` (a list). Here's how to set it up:\n\n## Basic Structure\n\n```json\n{\n  \"tableIndexConfig\": {\n    \"starTreeIndexConfigs\": [\n      {\n        \"dimensionsSplitOrder\": [\"dimension1\", \"dimension2\", \"dimension3\"],\n        \"skipStarNodeCreationForDimensions\": [],\n        \"functionColumnPairs\": [\"AGGREGATION__column\"],\n        \"maxLeafRecords\": 1\n      }\n    ]\n  }\n}\n```\n\n## Key Configuration Parameters\n\n- **`dimensionsSplitOrder`** \u2014 Ordered list of dimensions to split on. The order matters for query optimization; place dimensions that appear in WHERE clauses first.\n- **`skipStarNodeCreationForDimensions`** \u2014 Dimensions to exclude from star-node creation (optional).\n- **`functionColumnPairs`** \u2014 List of aggregation functions and columns to pre-aggregate, formatted as `FUNCTION__columnName` (e.g., `SUM__Impressions`, `COUNT__*`).\n- **`maxLeafRecords`** \u2014 Maximum number of records in a leaf node. Set to `1` to pre-aggregate all dimension combinations.\n\n## Alternative: Using `aggregationConfigs`\n\nInstead of `functionColumnPairs`, you can use `aggregationConfigs` with optional compression:\n\n```json\n{\n  \"tableIndexConfig\": {\n    \"starTreeIndexConfigs\": [\n      {\n        \"dimensionsSplitOrder\": [\"Country\", \"Browser\", \"Locale\"],\n        \"skipStarNodeCreationForDimensions\": [],\n        \"aggregationConfigs\": [\n          {\n            \"columnName\": \"Impressions\",\n            \"aggregationFunction\": \"SUM\",\n            \"compressionCodec\": \"LZ4\"\n          }\n        ],\n        \"maxLeafRecords\": 1\n      }\n    ]\n  }\n}\n```\n\n## Example: Optimizing a Grouped Aggregation Query\n\nTo optimize this query:\n\n```sql\nSELECT SUM(Impressions)\nFROM myTable\nWHERE Country = 'USA'\nAND Browser = 'Chrome'\nGROUP BY Locale\n```\n\nConfigure the star-tree index as:\n\n```json\n{\n  \"tableIndexConfig\": {\n    \"starTreeIndexConfigs\": [\n      {\n        \"dimensionsSplitOrder\": [\"Country\", \"Browser\", \"Locale\"],\n        \"skipStarNodeCreationForDimensions\": [],\n        \"functionColumnPairs\": [\"SUM__Impressions\"],\n        \"maxLeafRecords\": 1\n      }\n    ]\n  }\n}\n```\n\n## Important Notes\n\n- Star-tree indexes are generated **only for new segments** after the configuration is applied to the table. Pinot does not support adding star-tree indexes to existing segments.\n- You can also enable a default star-tree index using the `enableDefaultStarTree` (boolean) field in `tableIndexConfig`.\n\n---\n\n**Sources**\n\n- build-with-pinot/indexing/star-tree-index.md \u2014 Star-tree index > Star-tree solution > Example\n- reference/configuration-reference/table.md \u2014 Table > Second-level fields > Table index config\n- operate-pinot/troubleshooting/ingestion-faq.md \u2014 Ingestion FAQ > Indexing > How to create star-tree indexes?",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:20:33-0700"
+        }
+      }
+    },
+    {
+      "id": "q004",
+      "question": "How do you enable an inverted index on a column in Pinot?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "build-with-pinot/indexing/inverted-index.md"
+      ],
+      "baseline_responses": {
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Inverted indexes in Pinot allow fast lookup of all records matching a specific value, ideal for\n  low-to-medium cardinality filter columns.\n\n  Configuration\n\n  In indexingConfig in the table config:\n\n  \"indexingConfig\": {\n    \"invertedIndexColumns\": [\"country\", \"deviceType\", \"status\"]\n  }\n\n  That's the core of it \u2014 just list the column names.\n\n  Via fieldConfigList (modern approach)\n\n  \"fieldConfigList\": [\n    {\n      \"name\": \"country\",\n      \"indexTypes\": [\"INVERTED\"]\n    }\n  ]\n\n  When to use it\n\n  - Low-to-medium cardinality columns used in WHERE filters with equality or IN predicates\n  - Columns like status, country, deviceType, category\n  - Works well alongside dictionary encoding (which is on by default)\n\n  How it works\n\n  Pinot's inverted index is a bitmap index (Roaring Bitmaps) \u2014 for each dictionary-encoded value, it\n  stores the set of doc IDs that have that value. Filtering becomes a bitmap lookup + merge rather than\n  a full scan.\n\n  Important notes\n\n  - Dictionary encoding must be enabled on the column (it is by default) \u2014 the inverted index maps\n  dictionary IDs to doc ID bitmaps.\n  - Adding an inverted index to an existing table requires a segment reload to take effect on existing\n  data; new segments pick it up automatically.\n  - For high-cardinality columns (e.g. UUIDs, timestamps), inverted indexes are ineffective \u2014 use a\n  range index instead.\n  - Inverted indexes increase segment size and slow down ingestion slightly due to index build cost.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T11:52:36-0700"
+        },
+        "docs_pinot_ai": {
+          "answer": "Enable it in the table config with fieldConfigList:\n\n{\n  \"fieldConfigList\": [\n    {\n      \"name\": \"playerName\",\n      \"indexes\": {\n        \"inverted\": {}\n      }\n    }\n  ]\n}\n\nFor older configs, the legacy form is tableIndexConfig.invertedIndexColumns:\n\n{\n  \"tableIndexConfig\": {\n    \"invertedIndexColumns\": [\"playerName\"]\n  }\n}\n\nPinot creates the inverted index for new segments automatically after the config is applied. To backfill existing segments, update the table config and then Reload All Segments. See Inverted Index and Configure Indexes.\n\nA few notes:\n- Use it for frequent WHERE filters like =, IN, GT, LT, and BETWEEN.\n- For sorted columns, Pinot can use a sorted inverted index automatically.\n- Bitmap inverted indexes are the recommended general option.\n\nSources: Inverted Index, Configure Indexes, Indexing, Forward Index, Range Index, 1.2.0, Concepts, Star-Tree Index, Components, Troubleshooting",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T11:55:12-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "# Enabling an Inverted Index in Apache Pinot\n\nThere are two approaches, depending on your Pinot version and configuration style:\n\n## Recommended Modern Approach\n\nUse the `fieldConfigList` in your table configuration:\n\n```json\n{\n  \"fieldConfigList\": [\n    {\n      \"name\": \"columnName\",\n      \"indexes\": {\n        \"inverted\": {}\n      }\n    }\n  ]\n}\n```\n\nReplace `columnName` with the actual column you want to index (e.g., `playerName`, `uuid`).\n\n**Key benefit:** If the column uses a RAW forward index, Pinot automatically materializes a standalone dictionary for the inverted index\u2014you don't need separate dictionary configuration.\n\n## Legacy Approach\n\nIf you're using an older Pinot version or prefer the legacy syntax, add the column to `tableIndexConfig`:\n\n```json\n{\n  \"tableIndexConfig\": {\n    \"invertedIndexColumns\": [\"columnName\"]\n  }\n}\n```\n\n## Applying to Existing Segments\n\nTo add an inverted index to segments already in your table:\n\n1. Update the table configuration using the Pinot Swagger API at `http://localhost:9000/help#!/Table/updateTableConfig`\n2. Invoke the reload API at `http://localhost:9000/help#!/Segment/reloadAllSegments`\n3. Verify the index was applied by querying the segment metadata API at `http://localhost:9000/help#/Segment/getServerMetadata` \u2014 the output should show `\"inverted-index\": \"YES\"` for the indexed column\n\n## Performance Impact\n\nWhen an inverted index is enabled on an unsorted column, Pinot maintains a mapping from each value to a bitmap of document IDs, making value lookups constant time O(1). This significantly speeds up filtering queries on that column.\n\n---\n\n**Sources**\n\n- build-with-pinot/indexing/inverted-index.md \u2014 Inverted index > Bitmap inverted index > Configuration\n- build-with-pinot/indexing/inverted-index.md \u2014 Inverted index > Bitmap inverted index\n- operate-pinot/troubleshooting/ingestion-faq.md \u2014 Ingestion FAQ > Indexing > How to apply an inverted index to existing segments?",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:22:29-0700"
+        }
+      }
+    },
+    {
+      "id": "q005",
+      "question": "How do you set up real-time ingestion from Kafka in Pinot?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "basics/getting-started/first-stream-ingest.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Set up a REALTIME table with Kafka stream configs, then add the schema and table. Pinot starts consuming as soon as the table is created. See First Stream Ingest and Ingest from Apache Kafka.\n\nUse a table config like this:\n\n{\n  \"tableName\": \"events\",\n  \"tableType\": \"REALTIME\",\n  \"segmentsConfig\": {\n    \"timeColumnName\": \"ts\",\n    \"schemaName\": \"events\",\n    \"replicasPerPartition\": \"1\"\n  },\n  \"tableIndexConfig\": {\n    \"loadMode\": \"MMAP\",\n    \"streamConfigs\": {\n      \"streamType\": \"kafka\",\n      \"stream.kafka.topic.name\": \"events\",\n      \"stream.kafka.broker.list\": \"kafka:9092\",\n      \"stream.kafka.decoder.class.name\": \"org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder\",\n      \"stream.kafka.consumer.factory.class.name\": \"org.apache.pinot.plugin.stream.kafka30.KafkaConsumerFactory\",\n      \"stream.kafka.consumer.prop.auto.offset.reset\": \"smallest\",\n      \"realtime.segment.flush.threshold.rows\": \"0\",\n      \"realtime.segment.flush.threshold.time\": \"24h\",\n      \"realtime.segment.flush.threshold.segment.size\": \"50M\"\n    }\n  },\n  \"metadata\": { \"customConfigs\": {} }\n}\n\nThen:\n1. Create the Kafka topic.\n2. Create a Pinot schema that matches the message fields.\n3. Run AddTable with the schema and realtime table config.\n\nA few docs-backed notes:\n- kafka30 is the default connector.\n- Use kafka40 for KRaft-mode Kafka clusters.\n- Pinot uses low-level consumers only.\n- If your Kafka messages are plain JSON, JSONMessageDecoder is the right decoder.\n\nSources: Ingest from Apache Kafka, First Stream Ingest, Real-Time Product Analytics, Stream Ingestion on Kubernetes, Amazon MSK (Kafka), Real-Time, Hybrid Real-Time + Offline, Advanced Pinot Setup, Server, Flink Connector",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T12:44:13-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Real-time ingestion from Kafka is configured via a REALTIME table with a streamConfigs block in\n  indexingConfig.\n\n  Minimal working config\n\n  \"tableType\": \"REALTIME\",\n  \"indexingConfig\": {\n    \"streamConfigs\": {\n      \"streamType\": \"kafka\",\n      \"stream.kafka.consumer.type\": \"lowlevel\",\n      \"stream.kafka.topic.name\": \"user-events\",\n      \"stream.kafka.broker.list\": \"kafka-broker-1:9092,kafka-broker-2:9092\",\n      \"stream.kafka.consumer.factory.class.name\":\n  \"org.apache.pinot.plugin.stream.kafka20.KafkaConsumerFactory\",\n      \"stream.kafka.decoder.class.name\": \"org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder\",\n      \"realtime.segment.flush.threshold.rows\": \"100000\",\n      \"realtime.segment.flush.threshold.time\": \"6h\"\n    }\n  }\n\n  Consumer types\n\n  lowlevel (LLC): One consumer per Kafka partition per replica \u2014 recommended, default\n  highlevel (HLC): Deprecated, avoid\n\n  Common decoder classes\n\n  JSON: org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder\n  Avro: org.apache.pinot.plugin.inputformat.avro.KafkaAvroMessageDecoder\n  Protobuf: org.apache.pinot.plugin.inputformat.protobuf.ProtoBufMessageDecoder\n\n  Segment flush tuning\n\n  Segments are committed when either threshold is hit first:\n\n  \"realtime.segment.flush.threshold.rows\": \"100000\",\n  \"realtime.segment.flush.threshold.time\": \"6h\",\n  \"realtime.segment.flush.threshold.segment.size\": \"200M\"\n\n  Authentication / SSL for Kafka\n\n  Pass standard Kafka consumer properties prefixed with stream.kafka.consumer.prop.:\n\n  \"stream.kafka.consumer.prop.security.protocol\": \"SASL_SSL\",\n  \"stream.kafka.consumer.prop.sasl.mechanism\": \"PLAIN\",\n  \"stream.kafka.consumer.prop.sasl.jaas.config\":\n  \"org.apache.kafka.common.security.plain.PlainLoginModule required username=\\\"user\\\" password=\\\"pass\\\";\"\n\n  Key requirements\n\n  - Schema must be defined and uploaded before the table is created.\n  - timeColumnName in the schema must map to a field present in the Kafka messages.\n  - For upsert tables, the Kafka topic must be partitioned by the primary key and partition count must\n  match the table's partition count.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T12:45:55-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "# Setting Up Real-Time Ingestion from Kafka in Pinot\n\nReal-time ingestion in Pinot consumes messages from a Kafka topic and makes rows queryable within seconds of arrival. You configure this through a REALTIME table with stream ingestion settings.\n\n## Core Configuration\n\nThe essential components are:\n\n1. **Table Type**: Set `tableType` to `REALTIME`\n2. **Stream Configuration**: Define Kafka broker, topic, and message decoder in `streamConfigs` (or `ingestionConfig.streamIngestionConfig.streamConfigMaps` in newer configs)\n3. **Message Decoder**: Specify the decoder class matching your message format (e.g., JSON, Avro)\n4. **Consumer Factory**: Use the appropriate Kafka consumer factory class\n\n## Example: JSON Messages from Kafka\n\n```json\n{\n  \"tableName\": \"transcript\",\n  \"tableType\": \"REALTIME\",\n  \"segmentsConfig\": {\n    \"timeColumnName\": \"timestamp\",\n    \"timeType\": \"MILLISECONDS\",\n    \"schemaName\": \"transcript\",\n    \"replicasPerPartition\": \"1\"\n  },\n  \"tenants\": {},\n  \"tableIndexConfig\": {\n    \"loadMode\": \"MMAP\"\n  },\n  \"ingestionConfig\": {\n    \"streamIngestionConfig\": {\n      \"streamConfigMaps\": [\n        {\n          \"streamType\": \"kafka\",\n          \"stream.kafka.broker.list\": \"localhost:9876\",\n          \"stream.kafka.topic.name\": \"transcript-topic\",\n          \"stream.kafka.decoder.class.name\": \"org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder\",\n          \"stream.kafka.consumer.factory.class.name\": \"org.apache.pinot.plugin.stream.kafka30.KafkaConsumerFactory\",\n          \"stream.kafka.consumer.prop.auto.offset.reset\": \"smallest\",\n          \"stream.kafka.decoder.prop.format\": \"JSON\",\n          \"realtime.segment.flush.threshold.rows\": \"0\",\n          \"realtime.segment.flush.threshold.segment.rows\": \"50000\",\n          \"realtime.segment.flush.threshold.time\": \"3600000\"\n        }\n      ]\n    }\n  }\n}\n```\n\n## SSL/TLS Configuration\n\nFor encrypted connections to both Kafka and Schema Registry (when using Avro), configure two sets of SSL options:\n\n```json\n{\n  \"streamType\": \"kafka\",\n  \"stream.kafka.broker.list\": \"localhost:9092\",\n  \"stream.kafka.topic.name\": \"transcript-topic\",\n  \"stream.kafka.decoder.class.name\": \"org.apache.pinot.plugin.inputformat.avro.confluent.KafkaConfluentSchemaRegistryAvroMessageDecoder\",\n  \"stream.kafka.consumer.factory.class.name\": \"org.apache.pinot.plugin.stream.kafka30.KafkaConsumerFactory\",\n  \"security.protocol\": \"SSL\",\n  \"ssl.truststore.location\": \"/path/to/truststore\",\n  \"ssl.keystore.location\": \"/path/to/keystore\",\n  \"ssl.truststore.password\": \"truststore-password\",\n  \"ssl.keystore.password\": \"keystore-password\",\n  \"ssl.key.password\": \"key-password\",\n  \"schema.registry.url\": \"https://schema-registry:8081\",\n  \"stream.kafka.decoder.prop.schema.registry.rest.url\": \"https://schema-registry:8081\",\n  \"stream.kafka.decoder.prop.schema.registry.ssl.truststore.location\": \"/path/to/sr-truststore\",\n  \"stream.kafka.decoder.prop.schema.registry.ssl.keystore.location\": \"/path/to/sr-keystore\"\n}\n```\n\n**Note**: Properties prefixed with `ssl.` configure the Kafka consumer; properties prefixed with `stream.kafka.decoder.prop.schema.registry.ssl.` configure the Schema Registry client.\n\n## Verification\n\nAfter configuration, query the table to verify data ingestion:\n\n```sql\nSELECT * FROM transcript\n```\n\nRows appear in Pinot within seconds of being published to the Kafka topic.\n\n---\n\n**Sources**\n\n- build-with-pinot/ingestion/stream-ingestion/import-from-apache-kafka.md \u2014 Ingest streaming data from Apache Kafka > Kafka ingestion guidelines > Kafka configurations in Pinot\n- build-with-pinot/ingestion/stream-ingestion/README.md \u2014 Stream Ingestion > Create table configuration with ingestion configuration > Example table config with `ingestionConfig`\n- basics/getting-started/first-stream-ingest.md \u2014 First stream ingest > Steps > 1. Understand streaming ingestion\n- basics/getting-started/first-stream-ingest.md \u2014 First stream ingest > Verify",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:23:32-0700"
+        }
+      }
+    },
+    {
+      "id": "q006",
+      "question": "How do you reload Pinot segments after changing an index configuration?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "operate-pinot/segment-reload.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Update the table config, then reload the affected segments.\n\nFor an existing offline table, run:\n\ncurl -X POST \"http://localhost:9000/segments/{tableName}/reload?type=OFFLINE\" \\\n  -H \"accept: application/json\"\n\nThis rebuilds segment indexes in place on every server. Pinot returns a reloadJobId, and you can track it with:\n\ncurl -X GET \"http://localhost:9000/segments/segmentReloadStatus/{jobId}\" \\\n  -H \"accept: application/json\"\n\nFor one segment only, use:\n\nPOST /segments/{tableName}/{segmentName}/reload\n\nYou can also do this in the Pinot UI under Cluster Manager \u2192 TENANTS \u2192 Table Name \u2192 OPERATIONS \u2192 Reload All Segments.\n\nReload is the standard choice for index changes like adding an inverted index. If you need a full rebuild with back-filled new columns or compatible data-type changes, use RefreshSegmentTask instead.\n\nSources: Reload a Table Segment, Segment Lifecycle and Repair, Choosing Indexes, Segment Management, Indexing, Operations FAQ, Advanced Pinot Setup, Configure Indexes, Table Configuration",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T12:50:34-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Segment reload applies the updated index config to existing immutable segments without re-ingesting\n  data.\n\n  Via REST API\n\n  Reload all segments for a table:\n  POST /segments/{tableName}/reload\n  \n  Reload a specific segment:\n  POST /segments/{tableName}/{segmentName}/reload\n\n  With curl:\n  curl -X POST \"http://pinot-controller:9000/segments/myTable_OFFLINE/reload\"\n\n  Via Pinot UI\n\n  Navigate to Tables \u2192 your table \u2192 Reload All Segments in the Pinot controller UI.\n\n  What happens during reload\n\n  1. Controller sends reload messages to all servers hosting the table's segments.\n  2. Each server re-generates indexes for its local segments based on the current table config.\n  3. The segment is briefly unavailable on that server during the swap (other replicas serve queries).\n  4. No data re-ingestion \u2014 only index structures are rebuilt from existing segment data.\n\n  Important notes\n\n  - Real-time consuming segments are not reloaded \u2014 only completed (immutable) segments. New consuming\n  segments will pick up the config automatically.\n  - Reload is asynchronous \u2014 the API call returns immediately; use the reload status API to track\n  progress:\n  GET /segments/{tableName}/loadStatus\n  - For large tables, reload can be resource-intensive (CPU + disk I/O). Stagger reloads or reload\n  per-segment if needed.\n  - If you're adding an index (e.g. inverted, range, bloom filter), reload builds it. If you're removing\n   one, reload drops it.\n  - Star-tree index changes also require reload to take effect on existing segments.",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T12:52:24-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Reloading Segments After Index Configuration Changes\n\nAfter updating your table's index configuration (such as adding inverted indexes), you must reload the segments to apply the changes. Here are the two main approaches:\n\n### Via Pinot Admin Console\n\n1. From the left navigation menu, select **Cluster Manager**.\n2. Under **TENANTS**, select the **Tenant Name**.\n3. From the list of tables in the tenant, select the **Table Name**.\n4. Under **OPERATIONS**, click **Reload All Segments** (or select a specific segment under **SEGMENTS** and click **Reload Segment** in the **OPERATIONS** section).\n\n### Via REST API\n\nInvoke the reload API at:\n```\nhttp://localhost:9000/help#!/Segment/reloadAllSegments\n```\n\nThe API response includes a `reloadJobId` that you can use to monitor the reload operation status via:\n```\nhttp://localhost:18998/help#/Segment/getReloadJobStatus\n```\n\n## What Reload Does\n\nWhen you reload a segment, the Pinot server retrieves the updated table configuration from Zookeeper and uses it to guide segment reloading. This generates any new indexes (like inverted indexes) that were added to the `tableIndexConfig`. The reload operation swaps the segment atomically without taking it offline or interrupting ongoing queries.\n\n## Verification\n\nAfter reloading, verify that the index was applied by querying the segment metadata API at:\n```\nhttp://localhost:9000/help#/Segment/getServerMetadata\n```\n\nThe response will show the index status for each column, confirming whether the inverted index (or other indexes) are now present.\n\n---\n\n**Sources**\n\n- operate-pinot/troubleshooting/ingestion-faq.md \u2014 Ingestion FAQ > Indexing > How to apply an inverted index to existing segments?\n- operate-pinot/segment-reload.md \u2014 Reload a table segment > Use the Pinot Admin Console to reload segments\n- operate-pinot/troubleshooting/operations-faq.md \u2014 Operations FAQ > Segments > What's the difference between Reset, Refresh, and Reload?\n- operate-pinot/troubleshooting/README.md \u2014 Frequently Asked Questions (FAQs) > Indexing > Apply inverted index to existing setup",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:24:48-0700"
+        }
+      }
+    },
+    {
+      "id": "q007",
+      "question": "How do you configure a bloom filter on a Pinot table column?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "build-with-pinot/indexing/bloom-filter.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Configure it in the table config under fieldConfigList for the target column.\n\n{\n  \"tableName\": \"somePinotTable\",\n  \"fieldConfigList\": [\n    {\n      \"name\": \"playerID\",\n      \"encodingType\": \"RAW\",\n      \"indexes\": {\n        \"bloom\": {}\n      }\n    }\n  ]\n}\n\nThat enables the Bloom filter with default settings. You can also tune it with:\n- fpp \u2014 false positive probability, default 0.05\n- maxSizeInBytes \u2014 maximum Bloom filter size, default 0 meaning unlimited\n- loadOnHeap \u2014 load in heap memory or off-heap, default false\n\nExample with custom values:\n\n{\n  \"indexes\": {\n    \"bloom\": {\n      \"fpp\": 0.01,\n      \"maxSizeInBytes\": 1000000,\n      \"loadOnHeap\": true\n    }\n  }\n}\n\nBloom filters are off by default. Pinot uses them to prune segments for = and IN predicates. IN support is limited to 10 values or fewer.\n\nOlder configs also work through tableIndexConfig.bloomFilterColumns or tableIndexConfig.bloomFilterConfigs, but fieldConfigList is the recommended approach.\n\nSources: Bloom Filter, Querying Pinot, Concepts, Segment Pruning, Components, Filtering with IdSet, Filter, Inverted Index, Spark Pinot Connector Read Model, Logical Table",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T12:55:54-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Bloom filters speed up filtering by quickly ruling out segments that don't contain a queried value,\n  reducing segment pruning overhead.\n\n  Configuration\n\n  In indexingConfig:\n\n  \"indexingConfig\": {\n    \"bloomFilterColumns\": [\"userId\", \"orderId\"]\n  }\n\n  Via fieldConfigList (modern approach)\n\n  \"fieldConfigList\": [\n    {\n      \"name\": \"userId\",\n      \"indexTypes\": [\"BLOOM_FILTER\"],\n      \"properties\": {\n        \"bloomFilter.fpp\": \"0.05\",\n        \"bloomFilter.maxSizeInBytes\": \"1048576\"\n      }\n    }\n  ]\n\n  Key properties\n\n  Property: bloomFilter.fpp\n  Description: False positive probability (lower = larger filter, fewer false positives)\n  Default: 0.05\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Property: bloomFilter.maxSizeInBytes\n  Description: Cap on filter size in bytes\n  Default: 1048576 (1MB)\n  \n  When to use it\n\n  - High-cardinality columns queried with equality filters (WHERE userId = ?) \u2014 the opposite use case\n  from inverted indexes\n  - Columns like user IDs, order IDs, trace IDs, device IDs\n  - Most effective when many queries target values that exist in only a few segments \u2014 the bloom filter\n  lets servers skip irrelevant segments entirely\n\n  How it works\n\n  Each segment maintains a bloom filter over its column values. At query time, before scanning a\n  segment, Pinot checks the bloom filter \u2014 if it returns negative, the segment is skipped entirely.\n  False positives are possible (segment is scanned unnecessarily); false negatives are not (a matching\n  segment is never skipped).\n\n  Important notes\n\n  - Bloom filters operate at the segment level for pruning \u2014 they don't speed up scanning within a\n  segment (use inverted index for that).\n  - Requires a segment reload to apply to existing segments.\n  - Lower fpp values increase filter accuracy but increase memory and disk usage.\n  - Not useful for range queries \u2014 only equality lookups.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T12:57:39-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Configuration\n\nBloom filters are disabled by default. To enable one on a column, add it to the `fieldConfigList` section of your table configuration.\n\n### Basic Configuration (Default Parameters)\n\nUse an empty `bloom` object to apply default settings:\n\n```javascript\n{\n  \"tableName\": \"somePinotTable\",\n  \"fieldConfigList\": [\n    {\n      \"name\": \"playerID\",\n      \"encodingType\": \"RAW\",\n      \"indexes\": {\n        \"bloom\": {}\n      }\n    }\n  ]\n}\n```\n\n### Custom Parameters\n\nYou can customize three optional parameters within the `bloom` object:\n\n```javascript\n{\n  \"tableName\": \"somePinotTable\",\n  \"fieldConfigList\": [\n    {\n      \"name\": \"playerID\",\n      \"encodingType\": \"RAW\",\n      \"indexes\": {\n        \"bloom\": {\n          \"fpp\": 0.01,\n          \"maxSizeInBytes\": 1000000,\n          \"loadOnHeap\": true\n        }\n      }\n    }\n  ]\n}\n```\n\n### Parameters\n\n- **`fpp`** (default: `0.05`) \u2014 False positive probability, ranging from 0 to 1. Lower values increase accuracy but also increase index size.\n- **`maxSizeInBytes`** (default: `0` for unlimited) \u2014 Maximum size of the Bloom filter in bytes. This takes precedence over `fpp`; if the calculated filter size exceeds this limit, Pinot adjusts `fpp` downward to stay within bounds.\n- **`loadOnHeap`** (default: `false`) \u2014 Whether to load the filter into heap memory (`true`) or off-heap memory (`false`).\n\n### Disabling a Bloom Filter\n\nSet `disabled` to `true` to explicitly deactivate a Bloom filter on a column:\n\n```javascript\n{\n  \"indexes\": {\n    \"bloom\": {\n      \"disabled\": true\n    }\n  }\n}\n```\n\n## Use Cases\n\nBloom filters are effective for pruning segments during queries with **EQUALITY or IN predicates**. IN clause support is limited to 10 or fewer values to minimize pruning overhead.\n\n**Sources**\n\n- build-with-pinot/indexing/bloom-filter.md \u2014 Bloom filter > Configuration\n- build-with-pinot/indexing/bloom-filter.md \u2014 Bloom filter > Configuration > Example\n- build-with-pinot/indexing/bloom-filter.md \u2014 Bloom filter",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:26:17-0700"
+        }
+      }
+    },
+    {
+      "id": "q008",
+      "question": "How do you apply a transformation to a column at ingestion time in Pinot?",
+      "query_type": "how-to",
+      "expected_sources": [
+        "build-with-pinot/ingestion/ingestion-level-transformations.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Use ingestionConfig.transformConfigs in the table config. Each transform maps a destination column to a transform function.\n\n{\n  \"ingestionConfig\": {\n    \"transformConfigs\": [\n      {\n        \"columnName\": \"maxPrice\",\n        \"transformFunction\": \"Groovy({prices.max()}, prices)\"\n      },\n      {\n        \"columnName\": \"hoursSinceEpoch\",\n        \"transformFunction\": \"toEpochHours(timestamp)\"\n      }\n    ]\n  }\n}\n\nA few rules apply:\n- columnName is the target column.\n- transformFunction can use built-in Pinot functions or Groovy.\n- A single transform must use only one function type.\n- Add the destination column to your schema.\n- Transforms can be chained. A later transform can use a field created earlier.\n\nPinot evaluates these transforms on normalized extractor values, not raw source encoding. For typed input like Avro or Parquet, values are coerced to the schema type after the transform.\n\nSources: Ingestion Transformations, Transformations and Aggregations, Data Ingestion, Monitoring Metrics, Concepts, Stream Ingestion with Upsert, Components, Transformations, Transform, Overview",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:04:35-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Pinot supports ingestion-time transformations via transformConfigs in the table config, letting you\n  derive or mutate columns before they're stored.\n\n  Configuration\n\n  In the table config:\n\n  \"ingestionConfig\": {\n    \"transformConfigs\": [\n      {\n        \"columnName\": \"fullName\",\n        \"transformFunction\": \"concat(firstName, ' ', lastName)\"\n      },\n      {\n        \"columnName\": \"eventHour\",\n        \"transformFunction\": \"toEpochHours(eventTimestamp)\"\n      },\n      {\n        \"columnName\": \"upperCountry\",\n        \"transformFunction\": \"upper(country)\"\n      }\n    ]\n  }\n\n  The columnName must be defined in the schema. The source fields used in transformFunction do not need\n  to be in the schema.\n\n  Common built-in functions\n\n  toEpochSeconds(col): Convert millis to epoch seconds\n  toEpochMinutes(col): Convert millis to epoch minutes\n  toEpochHours(col): Convert millis to epoch hours\n  toEpochDays(col): Convert millis to epoch days\n  concat(a, b, delimiter): String concatenation\n  upper(col) / lower(col): Case transformation\n  jsonPathString(col, '$.field'): Extract field from JSON string\n  jsonPathLong(col, '$.field'): Extract numeric field from JSON string\n  groovy(script, returnType, args...): Arbitrary Groovy expression\n\n  Groovy example\n\n  For complex logic not covered by built-ins:\n\n  {\n    \"columnName\": \"scoreCategory\",\n    \"transformFunction\": \"groovy({'score > 90 ? \\\"high\\\" : score > 50 ? \\\"medium\\\" : \\\"low\\\"'}, 'String', score)\"\n  }\n\n  Filtering at ingestion\n\n  To drop records entirely, use filterConfig alongside transforms:\n\n  \"ingestionConfig\": {\n    \"filterConfig\": {\n      \"filterFunction\": \"Groovy({'eventType == \\\"DELETE\\\"'}, eventType)\"\n    }\n  }\n\n  Important notes\n\n  - Transforms apply to both real-time and offline ingestion when defined in the table config.\n  - Source columns used only in transforms (not stored) should be excluded from the schema.\n  - Groovy is powerful but has overhead \u2014 prefer built-in functions where possible.\n  - Groovy must be explicitly enabled on the server via pinot.server.instance.enable.groovy=true.",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:12:19-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Applying Column Transformations at Ingestion Time\n\nTo apply a transformation to a column at ingestion time in Pinot, define `transformConfigs` in the table's `ingestionConfig`. Each transform specifies a destination `columnName` and a `transformFunction`.\n\n### Configuration Structure\n\n```json\n{\n  \"tableConfig\": {\n    \"tableName\": \"myTable\",\n    \"ingestionConfig\": {\n      \"transformConfigs\": [\n        {\n          \"columnName\": \"destinationColumn\",\n          \"transformFunction\": \"<expression>\"\n        }\n      ]\n    }\n  }\n}\n```\n\n### Example\n\nHere's a practical example that transforms two fields:\n\n```json\n{\n  \"tableName\": \"myTable\",\n  \"ingestionConfig\": {\n    \"transformConfigs\": [\n      {\n        \"columnName\": \"maxPrice\",\n        \"transformFunction\": \"Groovy({prices.max()}, prices)\"\n      },\n      {\n        \"columnName\": \"hoursSinceEpoch\",\n        \"transformFunction\": \"toEpochHours(timestamp)\"\n      }\n    ]\n  }\n}\n```\n\nIn this example:\n- `maxPrice` is computed by extracting the maximum value from the `prices` field using a Groovy function\n- `hoursSinceEpoch` is computed by converting the `timestamp` field to hours since epoch using a built-in function\n\n### Important Considerations\n\n**Normalized Input Values**: Pinot evaluates transforms against normalized extractor values, not raw source-format encoding. For typed formats (Avro, Parquet, ORC, Thrift, Protocol Buffers):\n- Booleans remain `Boolean`\n- `Byte` and `Short` values widen to `Integer`\n- Logical dates and times surface as `java.time.LocalDate`, `java.time.LocalTime`, or `java.sql.Timestamp`\n- Multi-value fields surface as `Object[]`\n- Maps or nested records surface as `Map<Object, Object>`\n\nIf you have older transforms that depended on format-specific quirks (like stringified booleans or raw epoch values), update them to handle normalized values or cast explicitly.\n\n**Adding New Columns**: If you add a new column to the table or schema configuration during ingestion, incorrect data may appear in consuming segments. To avoid this, pause consumption, apply the new configuration, reload segments, and then resume consumption.\n\n---\n\n**Sources**\n\n- build-with-pinot/ingestion/ingestion-level-transformations.md \u2014 Ingestion Transformations > Types of transformation > Column transformation\n- build-with-pinot/ingestion/ingestion-level-transformations.md \u2014 Ingestion Transformations > Add a new column during ingestion",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:27:26-0700"
+        }
+      }
+    },
+    {
+      "id": "q009",
+      "question": "What is the default query port for the Pinot broker, and what configuration property controls it?",
+      "query_type": "factual",
+      "expected_sources": [
+        "reference/configuration-reference/broker.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "The default Pinot broker query port is 8099.\n\nThe legacy property that controls it is pinot.broker.client.queryPort. It is marked deprecated. Use pinot.broker.client.access.protocols.http.port instead for the HTTP query listener.\n\nSee the broker configuration reference in Broker.\n\nDefault port: 8099\n\nLegacy property: pinot.broker.client.queryPort\n\nCurrent property: pinot.broker.client.access.protocols.http.port\n\nIf you are using gRPC instead of HTTP, the broker uses pinot.broker.grpc.port or pinot.broker.grpc.tls.port.\n\nSources: Broker, Broker,Broker gRPC API, JDBC, Monitoring Metrics, Broker Query API, Query Syntax Overview, Multi-Cluster Querying, Java, Default Disabled Rules",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-16T13:16:37-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "The default query port for the Pinot broker is 8099.\n\nThe configuration property that controls it is:\n\npinot.broker.client.queryPort",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 0,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-16T13:18:48-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Default Query Port\n\nThe default query port for the Pinot broker is **8099**, controlled by the configuration property:\n\n```\npinot.broker.client.queryPort\n```\n\nHowever, this property is **deprecated**. The recommended approach is to use the newer properties:\n\n```\npinot.broker.client.access.protocols.http.port\n```\n\nfor HTTP queries, or:\n\n```\npinot.broker.client.access.protocols.https.port\n```\n\nfor HTTPS queries.\n\nYou should also set the access protocols themselves:\n\n```\npinot.broker.client.access.protocols\n```\n\nwhich accepts a comma-separated list of protocols (e.g., `http` or `https` or `http,https`).\n\n## Setting the Port\n\nConfigure these in your `broker.conf` file and pass it during startup:\n\n```bash\nbin/pinot-admin.sh StartBroker -configFileName /path/to/broker.conf\n```\n\n---\n\n**Sources**\n\n- reference/configuration-reference/broker.md \u2014 Broker (queryPort, access.protocols properties)",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:28:42-0700"
+        }
+      }
+    },
+    {
+      "id": "q010",
+      "question": "How often does the Pinot retention manager run, and how long are deleted segments retained before permanent removal?",
+      "query_type": "factual",
+      "expected_sources": [
+        "basics/concepts/segment-retention.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "The retention manager runs once every 6 hours by default. Deleted segments are kept in the Deleted Segments area for 7 days by default before permanent removal.\n\nYou can change the retention window with controller.deleted.segments.retentionInDays. The run frequency is set with controller.retention.frequencyPeriod. See Segment Retention and the Controller config reference.\n\nRun frequency: 6h\nDeleted-segment retention: 7 days\nConfig keys: controller.retention.frequencyPeriod, controller.deleted.segments.retentionInDays\n\nSources: Segment Retention, Controller, Controller API Examples, Controller Admin API, Segment Management, Upgrade Notes, Table Configuration, Minion Merge Rollup Task, remove, PurgeTask",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:21:51-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Retention Manager Run Frequency\n\n  The retention manager runs on the controller every 6 hours by default.\n\n  Controlled by:\n  controller.retention.manager.frequencyInSeconds=21600\n\n  Deleted Segment Retention\n\n  When the retention manager identifies segments outside the table's retention window, it doesn't\n  immediately purge them from deep storage. They are moved to a \"deleted\" state and held for 7 days by\n  default before permanent removal.\n\n  Controlled by:\n  controller.deleted.segments.retentionInDays=7\n\n  How the full flow works\n\n  1. Retention manager wakes on its schedule and checks all segments against each table's\n  retentionTimeUnit / retentionTimeValue in the table config.\n  2. Out-of-retention segments are marked deleted in ZooKeeper and removed from the ideal state (servers\n   drop them locally).\n  3. The segment files remain in deep storage (S3, HDFS, etc.) for the deleted retention window.\n  4. After retentionInDays passes, the controller permanently deletes the files from deep storage.\n\n  Table-level retention config (for reference)\n\n  \"segmentsConfig\": {\n    \"retentionTimeUnit\": \"DAYS\",\n    \"retentionTimeValue\": \"30\"\n  }\n\n  Caveat: I'm confident in the defaults and general behavior, but the exact property name\n  controller.retention.manager.frequencyInSeconds \u2014 verify against your version's controller config\n  documentation, as naming conventions have shifted slightly across Pinot releases.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:24:36-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Retention Manager Frequency\n\nThe retention manager runs **once every 6 hours** by default. This is controlled by the configuration parameter `controller.retention.frequencyPeriod`, which defaults to `6h`.\n\n## Deleted Segments Retention\n\nDeleted segments are retained for **7 days** by default before permanent removal. This is controlled by `controller.deleted.segments.retentionInDays`, which defaults to `7d`.\n\nThis retention period applies when you delete a table using the default behavior\u2014deleted segments are moved to a `DeletedSegments` folder and kept for the configured duration, allowing recovery if the deletion was accidental.\n\nYou can override this behavior by passing the `retention` query parameter when deleting a table. For example, `retention=0d` will permanently delete all segments immediately with no retention period.\n\n---\n\n**Sources**\n\n- reference/configuration-reference/controller.md \u2014 Controller > Periodic task configuration > RetentionManager\n- reference/api-reference/controller-api.md \u2014 Controller API Examples > Segments > DELETE /tables/<tableName>",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:29:22-0700"
+        }
+      }
+    },
+    {
+      "id": "q011",
+      "question": "What is the default port that Pinot servers listen on for queries, and what configuration property sets it?",
+      "query_type": "factual",
+      "expected_sources": [
+        "reference/configuration-reference/server.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Pinot Server listens for queries on port 8098 by default.\n\nThe configuration property is pinot.server.netty.port. It sets the port for the server's unsecured Netty query listener. See the Server reference.\n\nExample:\n\npinot.server.netty.port=8098\n\nIn the same server config, pinot.server.netty.enabled=true enables that listener.\n\nSources: Server, Monitoring Metrics, Advanced Pinot Setup, Tuning Default MMAP Advice, Configuring TLS/SSL, Server, Plugin Configuration Reference, Table Configuration, Cluster Configuration, Multi-Cluster Querying",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:28:00-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Default port: 8098\n\n  The configuration property is:\n\n  pinot.server.netty.port=8098\n\n  This is the port the server listens on for gRPC/netty query requests from brokers (not HTTP \u2014\n  broker-to-server communication in Pinot uses netty, not REST).\n\n  Admin HTTP port\n\n  Servers also expose a separate HTTP admin port:\n\n  pinot.server.adminapi.port=8097\n\n  This serves the server's admin REST endpoints (health check, segment info, etc.).\n\n  Setting at startup\n\n  bin/pinot-admin.sh StartServer \\\n    -clusterName myCluster \\\n    -zkAddress zookeeper:2181 \\\n    -port 8098 \\\n    -adminPort 8097\n\n  All default ports for reference\n\n  Controller: 9000 \u2014 HTTP REST + UI\n  Broker: 8099 \u2014 Client query (HTTP)\n  Server: 8098 \u2014 Broker-to-server queries (netty)\n  Server: 8097 \u2014 Admin HTTP\n  Minion: 9514 \u2014 HTTP\n\n  Caveat: The exact property name pinot.server.netty.port \u2014 worth verifying against your version's\n  server config, as Pinot has had some property naming changes across releases.",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:30:41-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "The default port that Pinot servers listen on for queries is **8098**, configured via the `pinot.server.netty.port` property.\n\n```\npinot.server.netty.port: default 8098\n```\n\nThis port is used for Netty-based query connections to the Pinot Server. You can override it in your `server.conf` configuration file:\n\n```\npinot.server.netty.port=8098\n```\n\nAdditionally, Pinot servers support other query transport mechanisms:\n- **gRPC queries** listen on port 8090 by default (`pinot.server.grpc.port`), which is enabled by default\n- **Admin API** listens on port 8097 by default (`pinot.server.adminapi.port`)\n\n**Sources**\n- reference/configuration-reference/server.md \u2014 Server",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:29:58-0700"
+        }
+      }
+    },
+    {
+      "id": "q012",
+      "question": "What periodic tasks does the Pinot controller run in the background?",
+      "query_type": "factual",
+      "expected_sources": [
+        "basics/components/cluster/controller.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "The controller runs background periodic tasks on the lead controller for each table. The built-in ones include:\n\n- RetentionManager\n- OfflineSegmentIntervalChecker\n- RealtimeSegmentValidationManager\n- BrokerResourceValidationManager\n- SegmentStatusChecker\n- SegmentRelocator\n- StaleInstancesCleanupTask\n- TaskMetricsEmitter\n\nOther periodic tasks are also documented and may run when enabled by config:\n\n- ResponseStoreCleaner\n- PinotTaskManager\n- RebalanceChecker\n- ResourceUtilizationChecker\n\nEach task has its own frequency and initial-delay settings in controller config. You can see the current task names with GET /periodictask/names.\n\nSources: Controller, Controller, Minion Task Plugin, Monitoring Metrics, Pinot Data Explorer, Pinot Storage Model, Upsert Compaction Task, Upsert Compact Merge Task, Upsert Merge Compact Task, Minion Merge Rollup Task",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:31:54-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "The Pinot controller runs several periodic background tasks, all executing on the lead controller only\n   to avoid conflicts.\n\n  Core periodic tasks\n\n  Task: RetentionManager\n  Default Frequency: 6 hours\n  Purpose: Removes segments outside table retention window\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Task: OfflineSegmentIntervalChecker\n  Default Frequency: 24 hours\n  Purpose: Detects gaps/missing segments in offline tables\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Task: RealtimeSegmentValidationManager\n  Default Frequency: 1 hour\n  Purpose: Repairs stalled consuming segments, fixes LLC ideal state\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Task: BrokerResourceValidationManager\n  Default Frequency: 1 hour\n  Purpose: Reconciles broker ideal state with live brokers\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Task: SegmentStatusChecker\n  Default Frequency: 5 minutes\n  Purpose: Emits metrics on under-replicated/missing segments\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Task: PinotTaskManager\n  Default Frequency: 5 minutes\n  Purpose: Schedules minion tasks defined in table task configs\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Task: SegmentRelocator\n  Default Frequency: Configurable\n  Purpose: Moves segments when tier config or instance tags change\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  Task: StaleInstancesCleanupTask\n  Default Frequency: Configurable\n  Purpose: Removes dead instances from ZooKeeper\n\n  Frequency configuration properties\n\n  controller.retention.manager.frequencyInSeconds=21600\n  controller.offline.segment.interval.checker.frequencyInSeconds=86400\n  controller.realtime.segment.validation.frequencyInSeconds=3600\n  controller.broker.resource.validation.frequencyInSeconds=3600\n  controller.segment.status.checker.frequencyInSeconds=300\n  controller.task.manager.frequencyInSeconds=300\n\n  Notable behaviors\n\n  - RealtimeSegmentValidationManager is particularly important \u2014 it detects consuming segments that have\n   stopped making progress (e.g., due to a server crash) and creates new consuming segments to replace\n  them.\n  - SegmentStatusChecker drives the segment health metrics visible in the controller UI \u2014 the\n  red/yellow/green segment status per table.\n  - PinotTaskManager only schedules tasks; actual execution happens on Minion workers.\n\n  Triggering tasks manually\n\n  Any controller periodic task can be triggered on demand via REST:\n\n  POST /periodictask/run?taskname=RetentionManager&tableName=myTable",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:33:21-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Periodic Tasks Run by the Pinot Controller\n\nThe Pinot controller runs the following periodic tasks in the background:\n\n1. **RetentionManager** \u2014 Manages data retention policies\n2. **OfflineSegmentIntervalChecker** \u2014 Validates offline segment intervals\n3. **RealtimeSegmentValidationManager** \u2014 Validates realtime segments\n4. **BrokerResourceValidationManager** \u2014 Validates broker resources\n5. **SegmentStatusChecker** \u2014 Checks the status of segments\n6. **SegmentRelocator** \u2014 Relocates segments across instances\n7. **StaleInstancesCleanupTask** \u2014 Cleans up stale broker/server/minion instances\n8. **TaskMetricsEmitter** \u2014 Emits metrics for tasks\n\nEach task has its own configuration to define run frequency and can be triggered manually if needed. Tasks run on the lead controller for each table.\n\nYou can retrieve the full list of periodic tasks running on your cluster using the API:\n\n```bash\ncurl -X GET \"http://localhost:9000/periodictask/names\" -H \"accept: application/json\"\n```\n\nTo manually trigger a specific task, use:\n\n```bash\ncurl -X GET \"http://localhost:9000/periodictask/run?taskname=SegmentStatusChecker&tableName=jsontypetable&type=OFFLINE\" -H \"accept: application/json\"\n```\n\nIf you omit `tableName` and `type`, the task will run against all tables.\n\n**Sources**\n\n- basics/components/cluster/controller.md \u2014 Controller > Running the periodic task manually\n- reference/configuration-reference/controller.md \u2014 Controller > Periodic task configuration > StaleInstancesCleanupTask",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:30:44-0700"
+        }
+      }
+    },
+    {
+      "id": "q013",
+      "question": "What is the default segment retention for a Pinot table, and which configuration fields control it?",
+      "query_type": "factual",
+      "expected_sources": [
+        "operate-pinot/troubleshooting/operations-faq.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "By default, Pinot tables have no segment retention set. Segments are not purged unless retention is configured.\n\nThe retention is controlled in the table's segmentsConfig section by:\n- retentionTimeUnit\n- retentionTimeValue\n\nThese two fields define how long segments are kept before the retention manager deletes them. For example, 365 DAYS deletes segments older than 365 days. See Table Configuration and Segment Retention.\n\nExample:\n\n\"segmentsConfig\": {\n  \"retentionTimeUnit\": \"DAYS\",\n  \"retentionTimeValue\": \"365\"\n}\n\nIf those fields are omitted, the table keeps segments indefinitely.\n\nSources: Segment Retention, Table Configuration, Controller, Creating Pinot Segments, Pinot Storage Model, Videos, Controller API Examples, Segment Threshold, Operations FAQ, Real-Time",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:35:34-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Default retention\n\n  There is no default retention period. If retentionTimeUnit and retentionTimeValue are not set (or left\n   empty), Pinot retains segments indefinitely \u2014 the retention manager skips enforcement for that table.\n\n  Configuration fields\n\n  Both fields live in segmentsConfig in the table config:\n\n  \"segmentsConfig\": {\n    \"retentionTimeUnit\": \"DAYS\",\n    \"retentionTimeValue\": \"30\"\n  }\n\n  retentionTimeUnit: Time unit for retention window (DAYS, HOURS, MINUTES, SECONDS)\n  retentionTimeValue: Number of units to retain (any positive integer as a string)\n\n  How retention is evaluated\n\n  The retention manager compares each segment's end time (derived from the segment's time column max\n  value) against now - retentionWindow. Segments whose end time falls before that threshold are marked\n  for deletion.\n\n  Real-time vs offline\n\n  Both table types use the same fields. For real-time tables:\n  - The consuming segment is never deleted by the retention manager regardless of retention config.\n  - Only completed (immutable) segments are subject to retention enforcement.\n  \n  Updating retention on an existing table\n\n  Just update the table config via the controller REST API \u2014 no reload needed. The retention manager\n  will apply the new window on its next run:\n\n  PUT /tables/myTable\n\n  With the updated segmentsConfig in the request body.",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:36:35-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Default Retention\n\nBy default, **there is no retention set for a table in Apache Pinot**. Segments are retained indefinitely unless you explicitly configure retention.\n\n## Configuration Fields\n\nTo set or change table retention, configure these properties in the `segmentsConfig` section of your table configuration:\n\n- `retentionTimeUnit` \u2014 The unit of time (e.g., `DAYS`, `HOURS`)\n- `retentionTimeValue` \u2014 The numeric value for the retention period\n\n## Example\n\n```yaml\nsegmentsConfig:\n  retentionTimeUnit: DAYS\n  retentionTimeValue: 30\n```\n\n## How Retention Works\n\nThe retention manager automatically removes expired segments. By default, it runs once every 6 hours and purges:\n\n- **Expired segments** \u2014 Segments whose end time has exceeded the retention period\n- **Replaced segments** \u2014 Segments replaced as part of merge rollup tasks\n\nNote that segments without an end time (e.g., those lacking a time column) will not be purged, and segments in tables with `segmentIngestionType: REFRESH` are also exempt from purging.\n\n## Updating Retention\n\nUpdating the retention value in the table config is sufficient \u2014 **no table rebalance or segment reload is required**.\n\n---\n\n**Sources**\n\n- operate-pinot/troubleshooting/operations-faq.md \u2014 Operations FAQ > Alter Table > How to set or change table retention?\n- basics/concepts/segment-retention.md \u2014 Segment retention",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 1,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:33:54-0700"
+        }
+      }
+    },
+    {
+      "id": "q014",
+      "question": "What are the roles of Apache Helix and ZooKeeper in a Pinot cluster?",
+      "query_type": "conceptual",
+      "expected_sources": [
+        "basics/architecture.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Apache Helix manages cluster coordination, and ZooKeeper stores cluster state and metadata.\n\nIn Pinot, Helix maintains the intended state of the cluster. It tracks resources such as tables and segments, monitors brokers and servers, and drives the cluster toward the desired assignment when metadata changes or nodes fail. Pinot maps Helix roles like this: servers are participants, brokers are spectators, and the controller acts as the Helix controller. Helix also handles leader election for controllers. See Cluster and Architecture.\n\nZooKeeper is Pinot's durable metadata store. It holds schemas, table configs, segment metadata, cluster state, server and broker configuration, and Helix state. Helix uses ZooKeeper as the strongly consistent backing store and receives notifications when znodes change. See Zookeeper.\n\nIn short:\n- Helix = cluster manager and state reconciler.\n- ZooKeeper = persistent source of truth for Pinot cluster metadata.\n\nSources: Zookeeper, Cluster, Pinot Storage Model, Command-Line Interface (CLI), Set Up Cluster, Architecture, Broker, Troubleshoot ZooKeeper Znodes, Authentication, Multi-Cluster Querying",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:38:53-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Pinot uses Helix as its cluster management layer, and Helix uses ZooKeeper as its persistent store.\n  They serve distinct roles.\n\n  ZooKeeper\n\n  ZooKeeper is the source of truth for all cluster state. It stores:\n\n  - Ideal state and external state for all resources (segments, brokers)\n  - Instance configs (which servers/brokers/minions exist)\n  - Table configs and schemas\n  - Segment metadata and lineage\n  - Leader election state for the controller\n  - Helix's own internal data structures\n\n  ZooKeeper itself has no Pinot-specific logic \u2014 it's a generic distributed coordination service. Pinot\n  components read/write ZooKeeper via Helix.\n\n  Apache Helix\n\n  Helix is the cluster management framework that sits on top of ZooKeeper and provides:\n\n  - Leader election \u2014 exactly one controller is active at a time (the lead controller); others are\n  standby\n  - Ideal state management \u2014 Helix computes which segments should be assigned to which servers based on\n  replication factor and instance tags\n  - External state tracking \u2014 Helix tracks what state each server actually reports (e.g., ONLINE,\n  OFFLINE, CONSUMING) vs. what the ideal state says it should be\n  - State machine transitions \u2014 when a segment needs to move from OFFLINE to ONLINE, Helix orchestrates\n  the transition messages to the relevant server\n  - Spectator role for brokers \u2014 brokers watch Helix external state changes via ZooKeeper watches to\n  keep their routing tables up to date in real time\n\n  How they interact in practice\n\n  Controller (Helix participant + leader) writes Ideal State to ZooKeeper, and Helix sends state\n  transition messages to Servers (Helix participants), which download segments from deep store, load\n  them, and report ONLINE to ZooKeeper. Brokers (Helix spectators) watch ZooKeeper and update routing\n  tables.\n\n  Key distinction\n\n  ZooKeeper: Persistent store, generic k/v + watches, used by all Pinot components\n  Helix: Cluster orchestration logic, Pinot segment lifecycle/state machines, used by controller/servers/brokers\n\n  If ZooKeeper goes down, the cluster can continue serving existing queries (servers and brokers have\n  local state) but cannot make topology changes. If the lead controller (Helix leader) goes down, a\n  standby is elected via ZooKeeper within seconds.",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:39:43-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Apache Helix and ZooKeeper Roles in Pinot\n\n**Apache ZooKeeper** serves as Pinot's distributed metadata store, providing fault-tolerant, persistent storage of:\n- Table configurations\n- Schemas\n- Segment metadata\n- Cluster state\n\n**Apache Helix** is the cluster management layer built on top of ZooKeeper. Helix was designed by Pinot's original creators specifically for Pinot's cluster management needs. It maintains a persistent, fault-tolerant map of the intended state of the cluster and constantly works to drive the actual cluster state to match that intended state.\n\n### Helix Architecture\n\nHelix operates through three physical node types:\n\n- **Participant**: Nodes that store data or perform computation. Pinot servers are participants because they store segment data.\n- **Spectator**: Nodes that observe participant state through events. Pinot brokers are spectators because they need to know which servers host which segments.\n- **Controller**: Observes and manages participant state, coordinating all state transitions and ensuring state constraints are satisfied.\n\n### What Helix Manages\n\nHelix maintains the intended state for:\n- Number of servers and brokers\n- Table configuration and schema\n- Connections to streaming ingest sources\n- Batch ingestion jobs\n- Assignment of table segments to servers\n\nWhen configuration changes occur (schema updates, new ingest sources, new batch jobs) or physical cluster state changes (server failures, network partitions), Helix automatically schedules resource changes and pushes configuration updates to brokers and servers to maintain cluster consistency.\n\n---\n\n**Sources**\n\n- basics/architecture.md \u2014 Architecture > Core components > Apache Helix and ZooKeeper\n- basics/components/cluster/README.md \u2014 Cluster\n- basics/concepts/pinot-storage-model.md \u2014 Pinot storage model > Physical architecture\n- operate-pinot/troubleshooting/general-faq.md \u2014 General > How does Pinot use Zookeeper?",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:34:56-0700"
+        }
+      }
+    },
+    {
+      "id": "q015",
+      "question": "What is the difference between offline, real-time, and hybrid table types in Pinot?",
+      "query_type": "conceptual",
+      "expected_sources": [
+        "basics/components/table/README.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Pinot table types\n\nOffline: loads pre-built segments from batch sources. It is used for batch ingestion and historical data.\n\nReal-time: ingests data from streams like Kafka and builds segments inside Pinot for fresh data.\n\nHybrid: combines both under one logical table name. It is really two configs: one OFFLINE and one REALTIME.\n\nHybrid tables serve recent data from real-time segments and older, batch-corrected data from offline segments. Pinot uses a time boundary to route each time range to the best source. When offline segments catch up, they replace the overlapping real-time range automatically.\n\nA few practical differences:\n- Freshness: real-time is seconds-latency; offline is batch latency.\n- Data quality: offline can be deduplicated, enriched, or backfilled.\n- Retention: real-time retention is usually small; offline retention can be long.\n\nSources: Hybrid Real-Time + Offline, Table, Table Configuration, Pinot Storage Model, Concepts, Components, Introduction, Real-Time, Pinot Managed Offline Flows, Videos",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:42:23-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Pinot has three logical table types, each optimized for a different ingestion pattern.\n\n  Offline Tables\n\n  - Ingest data from batch sources (Hadoop, Spark, S3, etc.) via push or scheduled jobs\n  - Segments are built externally and pushed to the controller\n  - All segments are immutable from the moment they land\n  - No built-in streaming \u2014 data freshness depends on how often you run batch jobs\n  - Support the full index feature set including star-tree\n  - Suited for historical data, large datasets, or sources that don't have a stream\n\n  \"tableType\": \"OFFLINE\"\n\n  Real-Time Tables\n\n  - Ingest data from a streaming source (Kafka, Kinesis, etc.) continuously\n  - Servers maintain a consuming segment that is actively written to, then periodically committed as an\n  immutable segment\n  - Data freshness is typically seconds to minutes\n  - Some index types unavailable on the consuming segment (star-tree, etc.)\n  - Support upserts and dedup\n  - Suited for low-latency, fresh data requirements\n\n  \"tableType\": \"REALTIME\"\n\n  Hybrid Tables\n\n  Not a separate tableType \u2014 a hybrid table is a pair of an offline and a real-time table sharing the \n  same logical name (e.g., myTable_OFFLINE + myTable_REALTIME), both backed by the same schema.\n\n  The broker queries both physical tables and merges the results transparently. Queries against myTable\n  hit both.\n\n  Why use hybrid?\n\n  The common pattern is:\n  - Real-time table handles the recent window (last few hours/days) with fresh streaming data\n  - Offline table handles historical data built from a reliable batch pipeline with better compression\n  and full indexing\n  - As offline segments covering a time range are pushed, the corresponding real-time segments age out\n  via retention\n  \n  This gives you freshness from streaming and efficiency/reliability from batch.\n\n  Key differences summary\n\n  Offline: Batch ingestion, hours/days freshness, no upsert, full star-tree support, external segment push\n  Real-Time: Stream ingestion, seconds/minutes freshness, upsert support, star-tree on completed segments only, server-managed\n  Hybrid: Both ingestion types, seconds/minutes freshness, no upsert, star-tree on offline side, both segment creation methods",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:44:18-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Table Types in Apache Pinot\n\nApache Pinot supports three table varieties:\n\n**Offline (Batch) Tables**\nContain data from batch sources like CSV, Avro, or Parquet files. Data is static and typically represents historical, deduplicated, or enriched information.\n\n**Real-Time Tables**\nContain data from streaming sources like Apache Kafka, Apache Pulsar, or AWS Kinesis. Data is fresh and low-latency, but typically covers only recent time windows (e.g., the last few hours).\n\n**Hybrid Tables**\nA single logical table backed by *both* a real-time table and an offline table with the same name. Queries seamlessly span both sources. Pinot uses a **time boundary** mechanism to determine which records come from which table:\n\n1. The time boundary is a timestamp that separates offline from real-time data.\n2. Queries covering time ranges *before* the boundary are routed to offline segments.\n3. Queries covering time ranges *after* the boundary are routed to real-time segments.\n4. When a new offline segment is pushed covering a recent time range, the boundary advances and overlapping real-time segments are automatically dropped.\n\nThis pattern allows you to combine low-latency streaming data with batch-corrected, deduplicated, or enriched historical data in a single query.\n\n## Schema Configuration for Hybrid Tables\n\nBoth the offline and real-time tables in a hybrid setup must use the **exact same `schemaName`**. The schema defines shared dimension fields, metric fields, and a timestamp field (typically a `dateTimeFieldSpec`). Columns that exist only in the offline table (e.g., enriched data) can be nullable in the real-time table \u2014 Pinot handles null values gracefully.\n\n---\n\n**Sources**\n\n- basics/architecture.md \u2014 Architecture > Data ingestion overview\n- basics/concepts/time-boundary.md \u2014 Time boundary\n- playbooks/hybrid-offline-realtime.md \u2014 Hybrid Real-Time + Offline\n- playbooks/hybrid-offline-realtime.md \u2014 Hybrid Real-Time + Offline > Architecture sketch",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:35:31-0700"
+        }
+      }
+    },
+    {
+      "id": "q016",
+      "question": "What is the difference between Pinot's single-stage engine (SSE) and multi-stage engine (MSE), and when should you use each?",
+      "query_type": "conceptual",
+      "expected_sources": [
+        "build-with-pinot/querying-and-sql/sse-vs-mse.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "SSE is the default Pinot query path for simple analytics. It uses a scatter-gather model: the broker fans out the query, servers run it locally, and the broker merges results.\n\nMSE is the distributed engine for advanced SQL. It splits a query into multiple stages with exchange boundaries and distributed planning.\n\nUse SSE when you need:\n- filter, project, group by, or basic aggregate\n- the lowest overhead\n- queries that fit the simple scatter-gather model\n\nUse MSE when you need:\n- JOIN\n- window functions\n- subqueries\n- complex ANSI SQL or other distributed relational operators\n\nA few practical caveats:\n- MSE runs in memory and does not spill to disk.\n- Very large intermediate results can exceed memory.\n- Heavy ETL-style joins across many tables may be better in Trino or Spark.\n\nSources: Query Engines (SSE vs MSE), Multi-Stage Query, Understanding Stages, Explain Plan (Multi-Stage), Videos, Monitoring Metrics, Explain Plan (Single-Stage), Troubleshoot Multi-Stage Engine (MSE), 1.1.0, 0.11.0",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:49:16-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Pinot has two query execution engines with fundamentally different architectures.\n\n  Single-Stage Engine (SSE)\n\n  The original Pinot query engine, optimized for scatter-gather execution:\n\n  1. Broker receives query, fans it out to all relevant servers in parallel\n  2. Each server scans its local segments and returns partial aggregates\n  3. Broker merges partial results and returns the final answer\n\n  Strengths:\n  - Very low latency for aggregations, filters, and simple group-bys\n  - Minimal inter-node data movement \u2014 servers only return summaries\n  - Battle-tested and highly optimized for OLAP-style queries\n  \n  Limitations:\n  - No JOIN support between tables\n  - No subqueries\n  - No window functions\n  - Limited to queries expressible as a single scatter-gather round\n\n  Multi-Stage Engine (MSE)\n\n  Introduced in Pinot 0.11+, also called the v2 query engine. Uses a distributed query plan with\n  multiple execution stages:\n\n  1. Broker compiles the query into a distributed plan (like a mini query optimizer)\n  2. Plan is broken into stages \u2014 each stage runs on servers, exchanges intermediate results with other\n  servers via a shuffle layer\n  3. Supports full relational algebra: joins, subqueries, window functions, complex aggregations\n\n  Strengths:\n  - Supports JOIN across Pinot tables\n  - Supports correlated and non-correlated subqueries\n  - Supports window functions (ROW_NUMBER, RANK, LAG, LEAD, etc.)\n  - More standard SQL compatibility\n\n  Limitations:\n  - Higher latency than SSE for simple queries due to planning and shuffle overhead\n  - More memory pressure \u2014 intermediate results are exchanged between servers\n  - Less mature than SSE; some edge cases and performance cliffs\n  - Not all SSE query hints/features are supported\n\n  Enabling MSE\n\n  Per query via hint:\n  SELECT /*+ useMultistageEngine */ a.userId, b.name\n  FROM orders a JOIN users b ON a.userId = b.userId\n  \n  Or as a broker-level default:\n  pinot.query.server.enableMultistageEngine=true\n\n  When to use each\n\n  Aggregations, filters, group-by \u2192 SSE\n  Simple SELECT with high throughput \u2192 SSE\n  Latency-sensitive dashboards \u2192 SSE\n  JOIN between two Pinot tables \u2192 MSE\n  Subqueries \u2192 MSE\n  Window functions \u2192 MSE\n  Complex multi-step analytics \u2192 MSE\n\n  General guidance\n\n  Default to SSE \u2014 it's faster for the bread-and-butter OLAP query pattern. Switch to MSE only when your\n   query requires relational features SSE can't express. For hybrid workloads, you can selectively\n  enable MSE per query via the hint without changing cluster defaults.",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:51:18-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Single-Stage Engine (SSE)\n\nThe SSE uses a **scatter-gather execution model**. The broker receives a query, distributes it to relevant servers, each server processes its local segments independently, and the broker merges the partial results.\n\n**Use SSE when:**\n- Your query is a plain scatter-gather read over one or more tables\n- You only need functions available in both engines\n- You want the lowest conceptual and operational overhead\n\nSSE is the default engine and is optimized for the most common Pinot workloads: filter, project, group, and aggregate operations. It has lower overhead than MSE for simple analytic queries.\n\n## Multi-Stage Engine (MSE)\n\nThe MSE supports distributed execution of complex relational operations beyond simple scatter-gather patterns.\n\n**Use MSE when your query requires:**\n- Joins\n- Subqueries\n- Window functions\n- Other advanced relational operators or complex distributed query shapes\n\n**Production readiness:** MSE became production-ready in Pinot 1.0.0 (it was introduced experimentally in 0.11.0). Subsequent releases added null handling support (1.1.0) and performance improvements.\n\n## Enabling MSE\n\nTo use MSE-only features, enable it before your query:\n\n```sql\nSET useMultistageEngine = true;\n```\n\n## Null Handling\n\nSince Pinot 1.1.0, MSE supports null handling when column-based null storing is enabled. Before 1.1.0, all columns were treated as non-nullable.\n\n---\n\n**Sources**\n- build-with-pinot/querying-and-sql/sse-vs-mse.md \u2014 Query Engines (SSE vs MSE)\n- build-with-pinot/querying-and-sql/sse-vs-mse.md \u2014 Query Engines (SSE vs MSE) > Single-stage engine (SSE)\n- build-with-pinot/querying-and-sql/querying-pinot.md \u2014 Querying Pinot > When to use which engine\n- build-with-pinot/querying-and-sql/sse-vs-mse.md \u2014 Query Engines (SSE vs MSE) > Multi-stage engine (MSE) > Null handling\n- build-with-pinot/querying-and-sql/sql-reference.md \u2014 SQL Syntax and Operators Reference",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:36:33-0700"
+        }
+      }
+    },
+    {
+      "id": "q017",
+      "question": "How does Pinot's storage model work \u2014 what are tables, segments, and tenants?",
+      "query_type": "conceptual",
+      "expected_sources": [
+        "basics/concepts/pinot-storage-model.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Pinot's storage model is built around tables, segments, and tenants.\n\nTables are the logical data model. A table looks like a relational table with rows and columns, and it uses a schema. A table can be OFFLINE, REALTIME, or HYBRID.\n\nSegments are the physical storage shards of a table. Pinot breaks a table into one or more independent segments. Segments are what get stored and queried on Pinot servers. They can also be viewed as time-based partitions.\n\nTenants are logical namespaces for isolation. Every table is assigned a broker tenant and a server tenant. Brokers and servers are tagged with the same tenant names, and Pinot only schedules that table on matching hardware. This keeps workloads separated without running separate clusters. By default, everything uses DefaultTenant.\n\nIn practice:\n1. You define a table and its schema.\n2. Pinot stores the table as many segments.\n3. Those segments live only on servers in the table's tenant.\n4. For hybrid tables, Pinot uses two physical tables with the same name: one OFFLINE, one REALTIME.\n\nSources: Pinot Storage Model, Tenant, Using Multiple Tenants, Table, Segment Management, Reload a Table Segment, Table Configuration, Rebalance Tenant, Multi-Tenant Analytics, Dimension Table",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:54:23-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "These are the three core organizational abstractions in Pinot.\n\n  Tables\n\n  A table is the logical query target \u2014 what users write SQL against. It maps to a schema and a table\n  config.\n\n  - Named with a suffix internally: myTable_OFFLINE, myTable_REALTIME\n  - Queries use the base name (myTable) and the broker resolves to the correct physical table(s)\n  - A hybrid table is just an offline + real-time table sharing the same base name and schema\n\n  Segments\n\n  A segment is the physical unit of storage in Pinot \u2014 an immutable, self-contained columnar file.\n\n  Each segment contains:\n  - Columnar data \u2014 each column stored separately, compressed\n  - Indexes \u2014 inverted, range, bloom filter, star-tree, etc. embedded in the segment file\n  - Metadata \u2014 min/max values per column, row count, time range, schema reference\n  - Dictionary \u2014 for dictionary-encoded columns, maps encoded IDs back to values\n\n  Key properties:\n  - Immutable once committed (except during upsert compaction)\n  - The unit of replication \u2014 each segment is replicated across N servers per the table's replication\n  factor\n  - The unit of retention \u2014 the retention manager evaluates and deletes at the segment level\n  - Typically covers a time range, named like myTable__0__1__timestamp\n\n  Segments live in deep storage (S3, HDFS, GCS, local) as the source of truth, and are downloaded +\n  loaded into server memory/disk for serving.\n\n  Tenants\n\n  Tenants are a logical isolation mechanism that control which physical servers host which tables, using\n   Helix instance tags.\n\n  Every Pinot instance is tagged with a tenant name:\n  DefaultTenant_BROKER\n  DefaultTenant_SERVER\n\n  Tables declare which tenant they belong to:\n  \"tenants\": {\n    \"broker\": \"DefaultTenant\",\n    \"server\": \"DefaultTenant\"\n  } \n  \n  Helix assigns segments only to servers tagged with the matching server tenant, and brokers only route\n  queries to brokers tagged with the matching broker tenant.\n\n  This lets you run multiple logical clusters on shared physical hardware \u2014 e.g., separate tenants for\n  different teams or workloads \u2014 without cross-contamination.\n\n  How they fit together\n\n  Table (logical) \u2192 Schema (column definitions) + Table Config (indexes, retention, stream config, tenant) + Segments (physical storage units stored in deep storage, loaded on servers matching the table's tenant tag, replicated N times)\n\n  Key relationships\n\n  Table: Logical granularity, query target and config holder\n  Segment: Physical file granularity, storage/indexing/replication unit\n  Tenant: Operational granularity, server/broker isolation via tagging",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:55:50-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "# Pinot Storage Model\n\nPinot uses a distributed architecture with four core abstractions for organizing and managing data:\n\n## Tables\nTables are the primary storage unit in Pinot. They hold your data and grow infinitely over time as new data arrives. Every table is associated with a tenant (see below).\n\n## Segments\nSegments are independent shards that partition table data. A table may contain a single segment (for small tables) or scale to an unlimited number of segments as it grows. Segments function as time-based partitions and are the fundamental storage and query unit in Pinot.\n\nKey characteristics:\n- Segments are distributed across multiple Pinot servers for horizontal scalability\n- Each segment is stored independently on servers that scale horizontally for both storage and computation\n- Segment assignment, maintenance, and compaction directly affect query performance, storage cost, and operational resilience\n\n## Tenants\nTenants provide multi-tenancy support by creating logical namespaces that isolate data and workloads:\n\n- Every table belongs to a tenant (defaulting to `DefaultTenant` if not specified)\n- Physical cluster resources\u2014brokers and servers\u2014are also tagged with a tenant\n- Tables are scheduled for storage and query processing only on hardware resources with matching tenant tags\n- This isolation allows different teams and applications to manage their own schemas and tables without impacting other tenants on the same cluster\n- A single Pinot cluster can support multiple tenants, scaling out as new tenants increase query volume\n\n## Special Case: Dimension Tables\nDimension tables are replicated to **every server** in the tenant and loaded into an in-memory hash map for constant-time lookups. They must be small enough to fit in each server's heap.\n\n---\n\n**Sources**\n- basics/concepts/pinot-storage-model.md \u2014 Pinot storage model\n- basics/concepts/pinot-storage-model.md \u2014 Pinot storage model > Tenant\n- basics/concepts/pinot-storage-model.md \u2014 Pinot storage model > Segment\n- build-with-pinot/ingestion/batch-ingestion/dim-table.md \u2014 Dimension table > How dimension tables work\n- operate-pinot/segment-management.md \u2014 Segment Management > Purpose",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:37:26-0700"
+        }
+      }
+    },
+    {
+      "id": "q018",
+      "question": "Which Pinot index should you use for equality filters, range filters, and repeated aggregation queries?",
+      "query_type": "comparison",
+      "expected_sources": [
+        "build-with-pinot/indexing/choosing-indexes.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Use these indexes:\n\nEquality filters \u2014 Inverted index\nRange filters \u2014 Range index\nRepeated aggregation queries \u2014 Star-tree index\n\nThe main decision guide maps these patterns directly:\n- WHERE col = value and WHERE col IN (...) usually want an inverted index.\n- WHERE col BETWEEN ... or WHERE col > ... usually want a range index.\n- Repeated GROUP BY and aggregate workloads usually want a star-tree index.\n\nSources: Query Syntax Overview, Bloom Filter, Monitoring Metrics, Indexing, Range Index, Filter, Filtering with IdSet, Aggregation Functions, Forward Index, Choosing Indexes",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:59:04-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Equality filters (WHERE col = ?, WHERE col IN (...))\n\n  Low-to-medium cardinality columns \u2192 Inverted index\n  - Bitmap lookup by dictionary-encoded value, skips full column scan\n  - Example: WHERE country = 'US', WHERE status IN ('active', 'pending')\n\n  High-cardinality columns \u2192 Bloom filter + inverted index\n  - Bloom filter prunes irrelevant segments cheaply before scanning\n  - If per-row lookup is needed within a segment, pair with inverted index\n  - Example: WHERE userId = 12345, WHERE orderId = 'abc-123'\n\n  Range filters (WHERE col > ?, WHERE col BETWEEN ? AND ?)\n\n  Range index (sorted index)\n  - Stores min/max per block for efficient range pruning within a segment\n  - Much more effective than inverted index for range predicates\n  - Example: WHERE age BETWEEN 25 AND 40, WHERE price > 100.0\n\n  \"rangeIndexColumns\": [\"age\", \"price\", \"latency\"]\n\n  For the time column specifically, Pinot has built-in time-based segment pruning even without an\n  explicit range index \u2014 but adding one improves intra-segment performance.\n\n  Repeated aggregation queries (SUM, COUNT, MAX, GROUP BY)\n\n  Star-tree index\n  - Pre-aggregates metrics across dimension combinations at segment build time\n  - Turns aggregation queries into index lookups rather than full scans\n  - Best for fixed, known query patterns with low-to-medium cardinality dimensions\n  - Example: SELECT country, deviceType, SUM(revenue) FROM myTable GROUP BY country, deviceType\n  \n  \"starTreeIndexConfigs\": [\n    {\n      \"dimensionsSplitOrder\": [\"country\", \"deviceType\"],\n      \"functionColumnPairs\": [\"SUM__revenue\", \"COUNT__*\"],\n      \"maxLeafRecords\": 10000\n    }\n  ]\n\n  Quick reference\n\n  Equality filter, low/medium cardinality \u2192 Inverted index\n  Equality filter, high cardinality \u2192 Bloom filter (+ inverted)\n  Range filter, any cardinality \u2192 Range index\n  Aggregation / GROUP BY, low/medium dims \u2192 Star-tree index\n  Time range filter \u2192 Range index on time column\n\n  Combining indexes\n\n  These are not mutually exclusive \u2014 a column can have multiple indexes. A common production pattern:\n\n  - Time column: range index (for time range pruning)\n  - Filter dimensions (low cardinality): inverted index\n  - Filter dimensions (high cardinality): bloom filter\n  - Aggregation dimensions: star-tree covering the common GROUP BY combinations",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T13:59:56-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "# Index Selection for Common Query Patterns\n\nBased on your query patterns, here's which index to use:\n\n## Equality Filters\nUse **inverted index**. It efficiently executes equality filters and IN predicates directly.\n\n```sql\nSELECT COUNT(*)\nFROM baseballStats\nWHERE playerName = 'Barry Bonds'\n```\n\nFor very high-cardinality columns where you need point lookups, you can also add a **bloom filter** for segment pruning, though it works transparently without special query syntax:\n\n```sql\nSELECT playerName, teamID, hits\nFROM baseballStats\nWHERE playerID = 'bondsba01'\n```\n\n## Range Filters\nUse **range index** on numeric columns and time columns used in range filters.\n\n```sql\nSELECT campaign, SUM(impressions)\nFROM events\nWHERE eventDate BETWEEN 20240301 AND 20240331\nGROUP BY campaign\n```\n\n## Repeated Aggregation Queries\nUse **star-tree index** for your top 3\u20135 dashboard queries that dominate traffic. This accelerates GROUP BY and aggregation workloads.\n\n```sql\nSELECT teamID, SUM(hits) AS totalHits\nFROM baseballStats\nWHERE league = 'NL'\nGROUP BY teamID\nORDER BY totalHits DESC\nLIMIT 10\n```\n\n**Important:** Profile your queries before adding star-tree indexes\u2014each one adds ingestion overhead and increases segment size.\n\n## General Indexing Strategy\nStart with inverted indexes on every column used in WHERE equality filters, then layer in range indexes, sorted indexes (for the most common equality filter column), star-tree indexes for high-traffic aggregations, and bloom filters for high-cardinality point lookups.\n\n**Sources**\n\n- build-with-pinot/indexing/inverted-index.md \u2014 Inverted index > Query examples\n- build-with-pinot/indexing/bloom-filter.md \u2014 Bloom filter > Query examples\n- build-with-pinot/indexing/range-index.md \u2014 (referenced in indexing strategy)\n- playbooks/real-time-product-analytics.md \u2014 Real-Time Product Analytics > Indexing strategy\n- build-with-pinot/indexing/README.md \u2014 Indexing > Common index families",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:38:50-0700"
+        }
+      }
+    },
+    {
+      "id": "q019",
+      "question": "What is the difference between resetting, reloading, and rebalancing segments in Pinot, and when do you use each?",
+      "query_type": "comparison",
+      "expected_sources": [
+        "operate-pinot/segment-lifecycle-and-repair.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Reset, reload, and rebalance solve different problems:\n\nReset: puts a segment through OFFLINE and back to ONLINE or CONSUMING. Use it when a segment is in ERROR state and the data on the server is still fine. It does not re-download or rebuild the segment. If the local segment is corrupted, follow with a reload using forceDownload=true.\n\nReload: tells servers to re-read the existing segment from local disk, or from deep store with forceDownload=true, and rebuild in-memory structures like indexes and metadata. Use it after schema or table config changes that affect how the segment is served, such as adding an index or changing a default null value. It is an in-place operation.\n\nRebalance: recomputes the segment-to-server assignment and moves segments to match the ideal placement. Use it after capacity changes, tenant changes, replication changes, or segment assignment strategy changes. It is about placement, not rebuilding segment contents.\n\nIn short:\n- Reset = recover a bad segment state.\n- Reload = reapply config/schema to existing segment files.\n- Rebalance = move segments across servers.\n\nSources: Reload a Table Segment, Rebalance, Segment Lifecycle and Repair, Running Pinot in Production, Segment Management, Monitoring Metrics, 0.10.0, Rebalance Servers, Videos, Pinot Data Explorer",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:02:20-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Three distinct operations that are often confused because they all involve segments.\n\n  Resetting Segments\n\n  Fixes segments stuck in an error state in Helix \u2014 it transitions them back to OFFLINE then back to\n  their target state (ONLINE or CONSUMING), forcing the server to retry whatever transition failed.\n\n  When to use:\n  - A segment is stuck in ERROR state in the Helix external view\n  - A server failed mid-transition (e.g., failed to download or load a segment)\n  - You want to retry a failed state transition without restarting the server\n  \n  POST /segments/{tableName}/{segmentName}/reset\n  # or reset all segments in a table\n  POST /segments/{tableName}/reset\n\n  What it does NOT do: re-download or rebuild the segment \u2014 it just retries the Helix state transition.\n\n  ---\n  Reloading Segments\n\n  Rebuilds indexes and data structures within existing segment files on the server, based on the current\n   table config. The segment data itself is unchanged.\n\n  When to use:\n  - You added, removed, or changed an index (inverted, bloom filter, range, star-tree)\n  - You changed a column's encoding or compression config\n  - You need existing segments to reflect a table config change\n\n  POST /segments/{tableName}/reload\n  POST /segments/{tableName}/{segmentName}/reload\n\n  What it does NOT do: re-ingest or reprocess data \u2014 only rebuilds indexes from the existing columnar\n  data already in the segment.\n\n  ---\n  Rebalancing Segments\n  \n  Redistributes segment assignments across servers in the cluster \u2014 updates the Helix ideal state so\n  segments land on the right servers, then servers download/drop segments accordingly.\n\n  When to use:\n  - You added new servers to a tenant and want segments distributed across them\n  - You removed servers and need segments moved off them\n  - You changed replication factor and want it applied to existing segments\n  - You changed tier configs and want segments moved to the correct storage tier\n  - Segments are unevenly distributed across servers after scaling\n\n  POST /tables/{tableName}/rebalance?dryRun=false&reassignInstances=true&includeConsuming=false\n\n  Key options:\n  dryRun=true: Preview reassignment without applying\n  reassignInstances: Recompute instance assignment, not just segment placement\n  includeConsuming: Whether to move consuming segments (use carefully)\n  downtime: If false, ensures minimum replicas stay up during rebalance\n\n  What it does NOT do: rebuild indexes or fix error states \u2014 it only changes which server owns which\n  segment.\n\n  ---\n  Summary\n\n  Reset: Fixes Helix error state, touches state machine only\n  Reload: Fixes stale indexes, touches index structures on server\n  Rebalance: Fixes segment distribution, touches ideal state + server assignments",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:03:18-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Reset vs. Reload vs. Rebalance\n\nThese are three distinct segment operations with different purposes:\n\n### Reset\n**What it does:** Transitions a segment through the `OFFLINE` state and back to `ONLINE` (for offline segments) or `CONSUMING` (for real-time segments), forcing the server to reinitialize without deleting data.\n\n**When to use it:** Use reset when a segment is in `ERROR` state\u2014for example, due to an unrecoverable consumer exception or a failed segment download during state transition.\n\n**Key characteristic:** Reset does **not** re-download or rebuild the segment. If the underlying segment data is corrupted, follow up with a reload using `forceDownload=true`.\n\n**API:**\n```\nPOST /segments/{tableNameWithType}/{segmentName}/reset\nPOST /segments/{tableNameWithType}/reset?errorSegmentsOnly=true\n```\n\n### Reload\n**What it does:** Loads the segment again, often to generate a new index as updated in the table configuration. The server gets the new table configuration from Zookeeper and uses it to guide segment reloading. By default, it doesn't download segments, but you can force a clean replacement.\n\n**When to use it:** Use reload when you've updated table configuration and need segments to pick up those changes, or when you need to rebuild indexes. Also use it after a reset if segment data is corrupted (with `forceDownload=true`).\n\n**Key characteristic:** Reload swaps the segment on the server atomically without bringing it offline or affecting ongoing queries.\n\n**API:**\n```\nPOST /segments/{tableName}/reload\nPOST /segments/{tableName}/{segmentName}/reload\n```\n\nSupported parameters include `forceDownload` (re-download from deep store), `targetInstance`, and `instanceToSegmentsMap`.\n\n### Rebalance\n**What it does:** Redistributes segment replicas across servers, typically after capacity changes.\n\n**When to use it:** Use rebalance when you've added or removed servers, or need to rebalance segment distribution for performance or availability reasons.\n\nThe documentation references a dedicated [Rebalance](rebalance/README.md) runbook for detailed guidance on rebalancing after capacity changes.\n\n---\n\n**Sources**\n\n- operate-pinot/troubleshooting/operations-faq.md \u2014 Operations FAQ > Segments > What's the difference between Reset, Refresh, and Reload?\n- operate-pinot/segment-lifecycle-and-repair.md \u2014 Segment Lifecycle and Repair > Reset a segment\n- operate-pinot/segment-reload.md \u2014 Reload a table segment > Use the Pinot Controller API to reload segments\n- operate-pinot/running-pinot-in-production.md \u2014 Running Pinot in Production > Operational runbooks",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:39:56-0700"
+        }
+      }
+    },
+    {
+      "id": "q020",
+      "question": "What is the difference between upsert and dedup in Pinot, and when would you use each?",
+      "query_type": "comparison",
+      "expected_sources": [
+        "build-with-pinot/ingestion/upsert-and-dedup/dedup.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Upsert replaces older rows for the same primary key. Dedup drops repeated rows and keeps only one unique record.\n\nUse upsert when the latest version matters. That fits mutable data like order status, user profiles, or CDC streams. Pinot keeps one row per key and uses a comparison column, usually the time column, to pick the newest record.\n\nUse dedup when repeated events should be filtered out, not merged. That fits streams where duplicate deliveries happen, but every unique event should appear only once. Dedup drops a record if its primary key already exists.\n\nPractical rule:\n- Upsert = \"same key, newer value wins.\"\n- Dedup = \"same key, later copies are ignored.\"\n\nShared requirements. Both need:\n- a primary key in the schema\n- the input stream partitioned by that key\n- strictReplicaGroup routing for correctness\n\nIf your workload is append-only, neither is usually needed.\n\nSources: Upsert and Dedup, CDC / Upsert Pipeline, Stream Ingestion with Dedup, Offline Table Upsert, Monitoring Metrics, Query Syntax Overview, Stream Ingestion with Upsert, Pauseless Consumption, 1.3.0, 1.5.0",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:05:57-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "Both features handle duplicate records arriving from a stream, but they serve different purposes.\n\n  Dedup (Deduplication)\n\n  Ensures each unique primary key is ingested exactly once \u2014 subsequent records with the same primary\n  key are silently dropped regardless of content or timestamp.\n\n  \"dedupConfig\": {\n    \"dedupEnabled\": true,\n    \"hashFunction\": \"NONE\"\n  }\n\n  Behavior: first record in wins, all subsequent records with the same key are discarded.\n\n  When to use:\n  - Your stream may deliver the same event more than once (at-least-once delivery guarantees)\n  - Records are immutable \u2014 you never need to update a record, just prevent duplicates\n  - Example: deduplicating click events, transaction records, or sensor readings where re-delivery is\n  possible but the record itself never changes\n\n  ---\n  Upsert\n\n  Allows records with the same primary key to update the visible version \u2014 when a newer record arrives,\n  it supersedes the older one in query results. Old versions are retained in segments but filtered out\n  at query time.\n\n  \"upsertConfig\": {\n    \"mode\": \"FULL\"\n  }\n\n  Behavior: latest record (by comparison column) wins and is returned by queries; older versions are\n  hidden but still physically present in segments until compaction.\n\n  When to use:\n  - Records represent mutable entity state that changes over time\n  - You need the current value of something, not its history \n  - Example: user profile updates, order status changes, device last-seen timestamps, leaderboard scores\n\n  ---\n  Key differences\n\n  Purpose: Dedup prevents duplicate ingestion; Upsert reflects latest state of an entity\n  On duplicate key: Dedup drops the new record; Upsert replaces visible record with new one\n  Old records: Dedup never stores them; Upsert stores but hides until compaction\n  Partial updates: Not applicable for dedup; supported via PARTIAL mode for upsert\n  Comparison column: Not used for dedup; required for upsert (determines which record wins)\n  Use case: Dedup for idempotent events; Upsert for mutable entity state\n\n  ---\n  Important shared constraints\n\n  Both require:\n  - REALTIME table only\n  - primaryKeyColumns defined in the schema\n  - Partition-based routing (Kafka partitioned by primary key, replica group routing)\n  - Star-tree index is incompatible with both\n\n  They are mutually exclusive \u2014 you enable one or the other, not both on the same table.",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 0,
+            "total": 2
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:07:38-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Upsert vs. Dedup in Pinot\n\n**Upsert** and **Dedup** are related but distinct features for handling duplicate or modified records:\n\n### Upsert\nUpsert allows you to **modify existing records** based on a primary key. It's designed for scenarios where data needs corrections or updates\u2014for example, correcting a ride fare or updating a delivery status. With partial upserts, you only specify the columns that change and leave the rest untouched.\n\n**Key characteristic:** Upsert is about *updating* records with new values.\n\n### Dedup\nDedup (deduplication) is a stream ingestion feature that **eliminates duplicate records** based on a primary key, keeping only one row per key. When duplicates arrive, Pinot retains the row with the greatest comparison value (or uses the table time column if no comparison column is specified).\n\n**Key characteristic:** Dedup is about *removing* duplicates, not modifying data.\n\n### When to Use Each\n\n- **Use Upsert** when you need to modify or correct existing records in your table (realtime or offline tables in Pinot 1.5.0+).\n- **Use Dedup** when you're ingesting from a stream and want to ensure only one record per primary key survives, based on a comparison value.\n\n### Important Operational Differences\n\nDedup tables consume significantly more memory than standard tables because they maintain an in-memory map of primary keys to segment references. This requires careful capacity planning and monitoring. Upsert tables have similar constraints around partition count (you cannot increase partitions after creation).\n\n---\n\n**Sources**\n\n- build-with-pinot/ingestion/upsert-and-dedup/upsert.md \u2014 Upsert\n- build-with-pinot/ingestion/upsert-and-dedup/dedup.md \u2014 Stream ingestion with Dedup > Best practices\n- build-with-pinot/ingestion/upsert-and-dedup/offline-table-upsert.md \u2014 Offline Table Upsert > How offline upsert works",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:42:41-0700"
+        }
+      }
+    },
+    {
+      "id": "q021",
+      "question": "What happened to the native text index in Pinot 1.5.0, and what should you use instead?",
+      "query_type": "new-in-2026",
+      "expected_sources": [
+        "build-with-pinot/indexing/native-text-index.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "The native text index was removed in Pinot 1.5.0. It was already deprecated in 1.3.0. Use the Lucene-based text index instead. See Native Text Index and Text Search Support.\n\nTo migrate:\n1. Replace \"indexType\": \"NATIVE_TEXT\" with the standard text index config in fieldConfigList.\n2. Keep using TEXT_MATCH or TEXT_CONTAINS in queries.\n3. Reload segments so the index is rebuilt.\n\nThe standard text index uses Lucene and supports the same query patterns, plus more advanced operators like fuzzy matching, range queries, and custom analyzers.\n\nSources: Native Text Index, 1.2.0, Monitoring Metrics, Text Search Analytics, All Releases, 1.5.0, Components, 0.11.0, Query Syntax Overview, Text Search Support",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:09:53-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "I'm not confident enough in the specifics of this particular change to give you a reliable answer.\n\n  I know Pinot has had both a Lucene-based text index and a native text index implementation, and that\n  the native text index had known limitations compared to the Lucene-based approach. However, the\n  specific details of what changed in version 1.5.0 \u2014 whether the native text index was deprecated,\n  removed, or replaced, and the official recommendation going forward \u2014 are version-specific release\n  details I can't verify accurately from training data.\n\n  Getting this wrong could send you in the wrong direction, so I'd recommend checking:\n\n  - The Pinot 1.5.0 release notes (https://github.com/apache/pinot/releases) on GitHub\n  - The Apache Pinot documentation on text search indexing\n  - The Pinot migration guide if one was published for that release\n\n  This is exactly the kind of specific version-level change where my training data is most likely to be\n  incomplete or imprecise.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:10:35-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## What Happened to Native Text Index\n\nThe native text index was **removed in Pinot 1.5.0**. It had been deprecated since Pinot 1.3.0.\n\n## Migration Path\n\nYou should migrate to the Lucene-based **text index**. The migration involves three steps:\n\n1. **Update your table configuration** \u2014 Replace `\"indexType\": \"NATIVE_TEXT\"` with the equivalent text index configuration in `fieldConfigList`.\n\n2. **Update your queries** \u2014 Continue using `TEXT_MATCH` or `TEXT_CONTAINS` functions as before (the query syntax remains the same).\n\n3. **Reload segments** \u2014 Rebuild the index on your segments after updating the configuration.\n\n## Why the Change\n\nThe standard Lucene-based text index provides all the capabilities of the native text index plus additional features:\n- Fuzzy matching\n- Range queries\n- Custom analyzers\n\nAdditionally, Pinot 1.4.0 introduced a **multi-column text index** option that consolidates multiple text-indexed columns into a single Lucene index, reducing disk space, memory usage, and index creation time\u2014especially beneficial when indexing many text columns.\n\n---\n\n**Sources**\n\n- build-with-pinot/indexing/native-text-index.md \u2014 Native text index\n- build-with-pinot/indexing/native-text-index.md \u2014 Native text index > Migration\n- build-with-pinot/indexing/text-search-support.md \u2014 Text search support > Multi-column text index",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:43:12-0700"
+        }
+      }
+    },
+    {
+      "id": "q022",
+      "question": "What is the availability status of Pinot's Time Series Engine?",
+      "query_type": "new-in-2026",
+      "expected_sources": [
+        "build-with-pinot/querying-and-sql/time-series-queries.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "The Time Series Engine is Generally Available (GA) as of Pinot 1.5.0.\n\nThe engine is marked Generally Available on the Time Series Queries page.\n\nThe 1.5.0 release notes also state that it is now GA, building on the beta in 1.4.0.\n\nIf you are checking upgrade readiness, the 1.5.0 notes show the engine is fully supported there, including query execution improvements, POST /query/timeseries, and UI integration.\n\nSources: Time Series Queries, Videos, Components, Concepts, Code Modules and Organization, 1.5.0, All Releases, Time Series Language Plugin, Monitoring Metrics, Pinot Data Explore",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:11:59-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "I have partial knowledge on this but not enough confidence to give you a precise status answer.\n\n  What I know from training data:\n  - Pinot introduced a Time Series Engine designed to support time series query languages (including\n  PromQL) natively, positioning Pinot as a backend for time series workloads\n  - It was introduced as an experimental feature, not generally available, when it first appeared\n  - The intent was to allow Pinot to serve as a drop-in backend for Prometheus-compatible queries over\n  Pinot tables\n\n  What I'm uncertain about:\n  - Its exact status as of my knowledge cutoff (August 2025) \u2014 whether it remained experimental, moved\n  to beta, or reached GA\n  - Which specific version it stabilized in, if it did\n  \n  Given this is a rapidly evolving feature and status designations matter a lot for production\n  decisions, I'd recommend checking:\n  - The current Apache Pinot documentation under the time series section\n  - The Pinot GitHub release notes for recent versions\n  - The Pinot community Slack (#time-series channel if one exists)\n\n  This is another case where I'd rather flag my uncertainty than give you a stale or incorrect status.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:12:27-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Availability Status\n\nPinot's Time Series Engine is **Generally Available (GA)** as of **Pinot 1.5.0**.\n\n### Version History\n\n- **Pinot 1.3.0**: Introduced as Experimental\n- **Pinot 1.4.0**: Advanced to Beta status with enhancements and bugfixes\n- **Pinot 1.5.0**: Promoted to General Availability\n\nThe Time Series Engine provides a pluggable framework for supporting various time-series query languages such as PromQL and Uber's M3QL, enabling native time-series query capabilities in Pinot.\n\n---\n\n**Sources**\n\n- build-with-pinot/querying-and-sql/time-series-queries.md \u2014 Time Series Queries\n- reference/releases/1.5.0.md \u2014 1.5.0 > Time Series Engine (GA)\n- reference/releases/1.4.0.md \u2014 1.4.0 > Time Series Engine is Now in Beta\n- reference/releases/1.3.0.md \u2014 1.3.0 > Timeseries Engine Support in Pinot",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:43:36-0700"
+        }
+      }
+    },
+    {
+      "id": "q023",
+      "question": "What is MSE Lite Mode in Pinot, and how does its execution model differ from the regular multi-stage engine?",
+      "query_type": "new-in-2026",
+      "expected_sources": [
+        "build-with-pinot/querying-and-sql/multi-stage-query/multistage-lite-mode.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "MSE Lite Mode is Pinot's guardrail-oriented MSE execution mode for high-QPS or self-service workloads. It keeps advanced SQL features like joins, window functions, and subqueries, while capping each leaf stage's output rows. The default leaf-stage limit is 100000.\n\nIts execution model differs from regular MSE like this:\n\nLite Mode: query flow is scatter-gather, similar to SSE.\n- Leaf stages run on servers.\n- Non-leaf stages run in a single broker thread.\n- Joins run in the broker.\n\nRegular MSE: query flow is fully distributed.\n- Stages run across servers with network shuffles.\n- Joins and other intermediate work are distributed across servers.\n\nSo Lite Mode trades distributed execution for tighter bounds and simpler resource usage. It is useful when you want MSE features without allowing full scans or large distributed intermediates.\n\nEnable it with:\n\nSET useMultistageEngine=true;\nSET usePhysicalOptimizer=true;\nSET useLiteMode=true;\n\nSources: Multistage Lite Mode, Query Engines (SSE vs MSE), Run MSE in Production, Multi-Stage Query, Troubleshoot Multi-Stage Engine (MSE), Understanding Stages, Explain Plan (Multi-Stage), Stats, Production Guides, 1.4.0",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:14:11-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "This is specific enough that I'm not confident I have reliable information about it in my training\n  data.\n\n  I'm familiar with Pinot's multi-stage engine (MSE) in general \u2014 its distributed query planning,\n  shuffle-based inter-node data exchange, and support for joins/window functions/subqueries. However\n  \"MSE Lite Mode\" as a specific named feature or execution variant is not something I can describe with\n  enough confidence to be useful. It may have been introduced or named after my knowledge cutoff, or it\n  may be a feature I simply don't have reliable detail on.\n\n  Rather than speculate, I'd recommend:\n\n  - The Apache Pinot documentation on the multi-stage query engine\n  - Pinot GitHub release notes for recent versions (1.3+)\n  - The Pinot community Slack or dev mailing list\n\n  If you have context on where you encountered this term I'm happy to reason about it with you.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:14:37-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## MSE Lite Mode Overview\n\nMSE Lite Mode is an optional execution mode for the Multistage Engine (MSE) introduced in Pinot 1.4.0 and stable as of 1.5.0. It's designed as a guardrail-oriented mode for self-service and high-QPS tenants, capping resource consumption while preserving access to advanced SQL features.\n\n## Key Characteristics\n\n**Advanced SQL Features Preserved:**\nMSE Lite Mode retains all MSE query capabilities including Window Functions, Subqueries, and Joins.\n\n**Row Limits:**\nThe maximum number of rows returned by a Leaf Stage is configurable (default: 100,000 rows). This prevents unbounded full-table scans.\n\n**Execution Model:**\nLite Mode uses a **scatter-gather paradigm** similar to the Single-Stage Engine (SSE), rather than the distributed shuffle model of standard MSE. Leaf stages run in Servers, while all other operators execute single-threaded in the Broker.\n\n## Execution Differences: Lite Mode vs. Standard MSE\n\n| Aspect | Standard MSE | Lite Mode |\n|--------|--------------|-----------|\n| **Execution Model** | Fully distributed stages across servers with network shuffles | Scatter-gather leaf stages (like SSE) with non-leaf stages single-threaded in broker |\n| **Join Execution** | Distributed across servers | Runs entirely in the broker |\n| **Leaf Stage Row Limit** | No built-in limit | Configurable per-instance limit (default 100,000) |\n| **Target Workload** | Queries needing distributed joins or large intermediate result sets | High-QPS use-cases with window functions, subqueries, or small joins |\n\n## When to Use Lite Mode\n\n- You want to expose window functions or subqueries at high QPS without risk of unbounded full-table scans\n- Your joins operate on small, pre-filtered datasets that fit in broker memory\n- You want scatter-gather routing guarantees (segment pruning, replica-group routing)\n\n## Activation\n\nEnable Lite Mode with three query options:\n\n```sql\nSET useMultistageEngine=true;\nSET usePhysicalOptimizer=true;\nSET useLiteMode=true;\n```\n\n---\n\n**Sources**\n\n- build-with-pinot/querying-and-sql/multi-stage-query/multistage-lite-mode.md \u2014 Multistage Lite Mode > Overview\n- operate-pinot/production-guides/run-multi-stage-engine-in-production.md \u2014 Run the Multi-Stage Engine in Production > Choosing between standard MSE and Lite Mode\n- build-with-pinot/querying-and-sql/query-execution-controls/query-options.md \u2014 Query Options > Supported Query Options",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:44:58-0700"
+        }
+      }
+    },
+    {
+      "id": "q024",
+      "question": "What is the minimum Java version required to build and run Pinot services?",
+      "query_type": "new-in-2026",
+      "expected_sources": [
+        "basics/getting-started/install/local.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "The minimum Java version for building and running Pinot services is JDK 21+.\n\nThe Version Reference page lists \"Build/Runtime baseline: JDK 21+\" for Pinot services.\n\nThe Local setup page also says JDK 21 or later is required for building and running Pinot services.\n\nFor reference, the docs note a separate compatibility rule for client libraries: pinot-spi, pinot-java-client, and pinot-jdbc-client remain compatible with Java 11 for external JVM consumers.\n\nSources: Version Reference, Local, Monitoring Metrics, Build Docker Images, Java, All Releases, Kafka Connector Versions, Stream Connector Version Matrix, Tableau, Java admin client",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:39:43-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "From my training data, Pinot has required Java 11 as the minimum version for building and running for\n  most of its recent releases, with Java 11 and Java 17 being the two most commonly tested and supported\n   versions.\n\n  However I'd caveat this the same way as my previous answer \u2014 if you're targeting a specific recent\n  release (like 1.x), the minimum may have been raised. The authoritative source is the java.version or\n  maven.compiler.source property in the root pom.xml at your target release tag on GitHub.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:40:24-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "Based on the retrieved documentation, **JDK 21 or later** is the minimum Java version required to build and run Pinot services.\n\nThis requirement applies to Pinot services themselves. However, if you're using Pinot client libraries (`pinot-spi`, `pinot-java-client`, `pinot-jdbc-client`), those remain compatible with **JDK 11+** for external JVM consumers.\n\nFor historical context: Pinot 0.12.1 was the last version supporting JDK 8.\n\n**Sources**\n- basics/getting-started/pinot-versions.md \u2014 Pinot version reference > Compatibility notes\n- basics/getting-started/install/local.md \u2014 Local install > Prerequisites",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:45:15-0700"
+        }
+      }
+    },
+    {
+      "id": "q025",
+      "question": "How do you expand an array column into one row per element in Pinot's multi-stage engine?",
+      "query_type": "new-in-2026",
+      "expected_sources": [
+        "build-with-pinot/querying-and-sql/multi-stage-query/operator-types/unnest.md"
+      ],
+      "baseline_responses": {
+        "docs_pinot_ai": {
+          "answer": "Use CROSS JOIN UNNEST(...) in the multi-stage engine.\n\nSET useMultistageEngine=true;\n\nSELECT t.id, elem\nFROM myTable AS t\nCROSS JOIN UNNEST(t.arrayColumn) AS u(elem);\n\nThis expands each array element into its own row. A row with n elements produces n output rows. NULL or empty arrays produce no rows.\n\nIf you need the element position too, add WITH ORDINALITY:\n\nSET useMultistageEngine=true;\n\nSELECT t.id, elem, pos\nFROM myTable AS t\nCROSS JOIN UNNEST(t.arrayColumn) WITH ORDINALITY AS u(elem, pos);\n\nA few notes:\n- CROSS JOIN UNNEST is multi-stage engine only.\n- It requires useMultistageEngine=true.\n- You can also unnest multiple arrays together. Pinot aligns them by position. Shorter arrays are padded with NULL.\n\nSources: Unnest, 1.5.0, Troubleshoot Multi-Stage Engine (MSE), Understanding Stages, Ingestion Transformations, Array Functions, Query Engines (SSE vs MSE), Complex Type Examples (Unnest), Multi-Stage Query, Multi-Cluster Querying",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:43:16-0700"
+        },
+        "claude (claude-sonnet-4-6)": {
+          "answer": "In Pinot's multi-stage engine you use the UNNEST function in the FROM clause, similar to how it works\n  in other SQL systems that support array unnesting.\n\n  Syntax\n\n  SELECT t.userId, element\n  FROM myTable AS t, UNNEST(t.arrayColumn) AS element\n\n  Or using the explicit CROSS JOIN UNNEST form:\n\n  SELECT t.userId, element\n  FROM myTable AS t\n  CROSS JOIN UNNEST(t.arrayColumn) AS unnested(element)\n\n  Example\n\n  Given a table with a tags column of type STRING (multi-value):\n\n  SELECT /*+ useMultistageEngine */\n    userId,\n    tag\n  FROM userEvents AS u, UNNEST(u.tags) AS tag\n  WHERE tag = 'premium'\n\n  Important notes\n\n  - UNNEST is only available in the multi-stage engine \u2014 it is not supported in SSE. Use the\n  useMultistageEngine hint or enable MSE cluster-wide.\n  - In SSE, multi-value columns can be filtered and grouped using built-in MV functions (ARRAYLENGTH,\n  ARRAYCONTAINS, etc.) but you cannot explode rows.\n  - The unnested column behaves as a regular scalar column in the rest of the query \u2014 you can filter,\n  aggregate, and join on it.\n\n  Caveat: The exact syntax (particularly the UNNEST alias form) can vary slightly across Pinot versions\n  \u2014 verify against your version's MSE documentation if you hit parse errors.",
+          "scores": {
+            "accuracy": 0,
+            "completeness": 1,
+            "citations": 0,
+            "total": 1
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-14T14:49:25-0700"
+        },
+        "sommelier (claude-haiku-4-5)": {
+          "answer": "## Expanding Array Columns with UNNEST\n\nTo expand an array column into one row per element in Pinot's multi-stage engine, use the `CROSS JOIN UNNEST(...)` syntax:\n\n```sql\nSELECT *\nFROM your_table\nCROSS JOIN UNNEST(array_column) AS t(element)\n```\n\nThis operator is available only in the multi-stage query engine and requires `useMultistageEngine=true`. It is not supported in the single-stage engine.\n\n### Optional WITH ORDINALITY\n\nYou can optionally include `WITH ORDINALITY` to preserve the position of each element:\n\n```sql\nSELECT *\nFROM your_table\nCROSS JOIN UNNEST(array_column) WITH ORDINALITY AS t(element, position)\n```\n\n### Requirements\n\n- The multi-stage engine must be enabled (`useMultistageEngine=true`)\n- `CROSS JOIN UNNEST` is a multi-stage query engine feature only\n\n---\n\n**Sources**\n\n- build-with-pinot/querying-and-sql/multi-stage-query/operator-types/unnest.md \u2014 Unnest\n- reference/releases/1.5.0.md \u2014 1.5.0 > Multi-stage Query Engine Enhancements > UNNEST / CROSS JOIN UNNEST Support",
+          "scores": {
+            "accuracy": 1,
+            "completeness": 1,
+            "citations": 1,
+            "total": 3
+          },
+          "scored_by": "Robert Zych",
+          "scored_on": "2026-05-19T15:46:06-0700"
+        }
+      }
+    }
+  ]
+}

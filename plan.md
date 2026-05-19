@@ -808,12 +808,6 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ## Next Steps (in order)
 
-### Re-grade
-1. Re-grade all 25 questions: once all ingestion and prompt fixes are applied, run `sommelier query` for all 25 golden set questions; update all sommelier scores in `evals/golden_set.json`; run `uv run python -m evals.report` to regenerate `evals/results.md`; confirm V1 gates pass:
-   - Sommelier average score ≥ 2.5/3 across all 25 golden set questions (manually scored)
-   - Sommelier average beats plain Claude average (all three dimensions)
-   - Retrieval thresholds (Hit Rate@5, Recall@5, MRR@5): calibrate targets after first eval run based on observed distribution
-
 ### V1 Packaging
 1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
 2. Wire `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; internally calls the full query pipeline (retrieval + inference via `llm.py`); returns the finished LLM answer as the tool result; add `tracer.start_trace()` + `tracer.flush()` per request; the MCP client (Claude) echoes the finished answer — no second LLM generation needed
@@ -882,4 +876,7 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 
 ### Citation Format
 1. Replaced `[N]` inline citations with an unordered **Sources** bullet list: updated `prompts/system_prompt.md` to remove numbered-citation instructions and add a Sources bullet-list instruction; updated `build_user_message` in `llm.py` to remove `[N]` chunk headers and separate chunks with `---`; updated `tests/inference/test_llm.py` to assert `---` separator and absence of `[N]` markers. Also changed `prompt_version` in `observability/tracer.py` from a `git log` commit hash to a SHA-256 content hash of `system_prompt.md` — eliminates the git subprocess dependency and reflects uncommitted edits immediately.
+
+### Re-grade
+1. Re-graded all 25 questions after ingestion and prompt fixes: ran `sommelier query` for all 25 golden set questions, captured new answers (with updated Sources bullet-list citation format) into `evals/golden_set_regrade.json`, manually scored all 25 sommelier responses using `evals/score_review.py --file evals/golden_set_regrade.json` (docs_pinot_ai and claude scores carried forward unchanged), ran `uv run python -m evals.report --golden-set evals/golden_set_regrade.json` to regenerate `evals/results.md`. All V1 gates pass: sommelier avg 2.96/3 ✅ (was 2.84), accuracy 0.96 > 0.56 ✅, completeness 1.00 > 0.92 ✅ (was tied, now passing), citations 1.00 > 0.00 ✅. Added `--file` argument to `evals/score_review.py` so it can target any golden set file.
 
