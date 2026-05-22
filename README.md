@@ -12,6 +12,8 @@ A locally-run RAG assistant for Apache Pinot, available as an MCP server for Cla
 
 **Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
 
+**First run only**: FastEmbed downloads the embedding (~219 MB) and reranker (~92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
+
 ```bash
 git clone https://github.com/robertzych/sommelier.git && cd sommelier
 uv sync
@@ -140,7 +142,9 @@ cd sommelier
 uv sync
 ```
 
-`uv sync` downloads all Python dependencies into an isolated virtual environment. FastEmbed ONNX models are downloaded on first use (not at install time). Pre-built Qdrant data is included in the repo — no separate download needed.
+`uv sync` downloads all Python dependencies into an isolated virtual environment. Pre-built Qdrant data is included in the repo — no separate download needed.
+
+On the **first query**, FastEmbed downloads the embedding (~219 MB) and reranker (~92 MB) ONNX models and caches them in `~/.cache`. Subsequent runs skip this step.
 
 **2. Configure**
 
