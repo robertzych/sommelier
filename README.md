@@ -255,7 +255,7 @@ Claude Code inherits `ANTHROPIC_API_KEY` from your shell, so no `env` block is n
 
 ## Running Ingestion
 
-Skip this section if you used `bash scripts/download_data.sh`.
+Skip this section if you cloned the repo — pre-built Qdrant data is included.
 
 Run ingestion to build or rebuild the vector index from the official Pinot docs:
 
