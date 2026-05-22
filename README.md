@@ -62,7 +62,16 @@ User query
     └── BM25 encode  ──→ top 20 by BM25  ──┴── RRF → top 20 → cross-encoder → top 5 → LLM
 ```
 
-### Ingestion: Contextual Chunking + LLM Code Annotation
+### Ingestion: Incremental Updates, Contextual Chunking + LLM Code Annotation
+
+**Incremental updates** (`src/ingestion/ingest.py`): Point IDs are SHA-256 content hashes of the chunk text, cast to UUIDs — deterministic and unique per chunk. When a doc file changes, modified chunks get new IDs; the old IDs become orphans. Per file: scroll existing point IDs, diff against new, delete orphans, insert new. Unchanged chunks (same ID already in Qdrant) are skipped entirely. No updates — only inserts and deletes.
+
+```
+File unchanged → skip (IDs already in Qdrant)
+File modified  → old IDs deleted + new IDs inserted
+File deleted   → old IDs deleted
+New file       → all IDs inserted
+```
 
 Two classes of retrieval problems emerged during evaluation, each requiring a different ingestion fix.
 
@@ -121,18 +130,9 @@ The one remaining reranked@5 miss (q015) reaches candidates@20 at rank 1 but is 
 
 Full per-question breakdown: [evals/results.md](evals/results.md)
 
-### MCP Server + Incremental Ingestion
+### MCP Server
 
 **MCP server** (`src/mcp_server.py`): Sommelier runs as a persistent process, so the pipeline is initialized lazily on the first tool call rather than at import time — ONNX model loads (~2s) happen once and are amortized across all subsequent queries. A server-side `_history` list accumulates user/assistant turns across MCP calls, capped at `memory_turns * 2`, giving follow-up questions full conversation context. The tool docstring doubles as a behavior contract: it instructs Claude to pass the user's question verbatim (no paraphrasing) and display the response exactly as returned.
-
-**Incremental ingestion** (`src/ingestion/ingest.py`): Point IDs are SHA-256 content hashes of the chunk text, cast to UUIDs — deterministic and unique per chunk. When a doc file changes, modified chunks get new IDs; the old IDs become orphans. Per file: scroll existing point IDs, diff against new, delete orphans, insert new. Unchanged chunks (same ID already in Qdrant) are skipped entirely. No updates — only inserts and deletes.
-
-```
-File unchanged → skip (IDs already in Qdrant)
-File modified  → old IDs deleted + new IDs inserted
-File deleted   → old IDs deleted
-New file       → all IDs inserted
-```
 
 ---
 
