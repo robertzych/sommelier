@@ -29,9 +29,9 @@ Or wire it as an MCP server and ask directly inside Claude — see [Claude Deskt
 
 [Apache Pinot](https://pinot.apache.org/) is a distributed OLAP datastore built for real-time analytics at scale — used at LinkedIn, Uber, and Stripe to serve sub-second queries over billions of rows. Its configuration surface is dense: dozens of table config keys, multiple ingestion paths, pluggable components at every layer.
 
-The official docs search helps but has two limitations. First, it doesn't synthesize across topics — a question like "how do I configure upsert with dedup?" spans three separate doc pages. Second, general-purpose LLMs including Claude have a training cutoff. Features introduced after August 2025 (the Time Series Engine GA, MSE Lite Mode, CROSS JOIN UNNEST) are simply outside their knowledge.
+[docs.pinot.apache.org](https://docs.pinot.apache.org) has an LLM-powered search that handles single questions well, but it doesn't support follow-up questions. General-purpose LLMs like Claude also have a training cutoff — features introduced after August 2025 (the Time Series Engine GA, MSE Lite Mode, CROSS JOIN UNNEST) are simply outside their knowledge.
 
-Sommelier solves both: it retrieves the relevant doc sections in real time and uses an LLM only for synthesis. It runs entirely on your machine — no data leaves your environment — and integrates into Claude as an MCP server so you can ask Pinot questions natively without switching tools.
+Sommelier addresses both: it retrieves the relevant doc sections in real time, delivers high quality answers (2.96/3 on a 25-question golden set vs 1.48/3 for raw Claude), supports multi-turn conversations so follow-up questions carry full context, and integrates into Claude as an MCP server so you can ask Pinot questions natively inside your existing tools.
 
 ---
 
