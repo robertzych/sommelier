@@ -4,7 +4,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-purple)](https://github.com/astral-sh/uv)
 
-A locally-run RAG assistant for Apache Pinot, available as an MCP server for Claude Desktop and Claude Code.
+A RAG assistant for Apache Pinot available as an MCP server for Claude Desktop and Claude Code.
 
 ---
 
@@ -39,30 +39,7 @@ Sommelier addresses both: it retrieves the relevant doc sections in real time, d
 
 ![Sommelier Architecture Diagram](Sommelier%20Architecture%20Diagram.png)
 
-### Retrieval: Hybrid Search + Two-Stage Reranking
-
-Apache Pinot's documentation is dense with technical vocabulary: exact config keys (`pinot.broker.client.queryPort`), class names (`RealtimeToOfflineSegmentsTask`), and numeric constants. Semantic-only search misses exact term matches; keyword-only search misses paraphrased queries. Both are required.
-
-**Stage 1 — Hybrid retrieval (top 20 candidates)**
-
-Each query is encoded into two representations simultaneously:
-
-- **Dense vector** (`BAAI/bge-base-en-v1.5`, 768 dims, FastEmbed) — captures semantic meaning; finds "what port does the broker listen on?" even if the docs say "broker query port"
-- **Sparse vector** (`Qdrant/bm25`, FastEmbed) — captures exact term overlap; critical for config keys and class names that semantic models may not distinguish
-
-Qdrant's native Reciprocal Rank Fusion (RRF) merges the two ranked lists. Chunks that rank well in both lists rise to the top; chunks present in only one are demoted. No manual score normalization.
-
-**Stage 2 — Cross-encoder reranking (top 20 → top 5)**
-
-Bi-encoders (used in Stage 1) embed query and document independently — fast at scale, but imprecise. A cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`) scores each (query, chunk) pair jointly, attending to interactions between the two. More accurate, but too slow to run against the full collection. The 20→5 funnel gets both: fast broad retrieval, then precise reranking on a small candidate set.
-
-```
-User query
-    ├── dense embed ──→ top 20 by cosine ──┐
-    └── BM25 encode  ──→ top 20 by BM25  ──┴── RRF → top 20 → cross-encoder → top 5 → LLM
-```
-
-### Ingestion: Incremental Updates, Contextual Chunking + LLM Code Annotation
+### Ingestion Pipeline: Incremental Updates + Contextual Chunking + LLM Code Annotation
 
 **Incremental updates** (`src/ingestion/ingest.py`): Point IDs are SHA-256 content hashes of the chunk text, cast to UUIDs — deterministic and unique per chunk. When a doc file changes, modified chunks get new IDs; the old IDs become orphans. Per file: scroll existing point IDs, diff against new, delete orphans, insert new. Unchanged chunks (same ID already in Qdrant) are skipped entirely. No updates — only inserts and deletes.
 
@@ -75,9 +52,9 @@ New file       → all IDs inserted
 
 Two classes of retrieval problems emerged during evaluation, each requiring a different ingestion fix.
 
-**Problem 1 — Code blocks lack retrieval signal**: a code-heavy chunk has minimal prose for BM25 or dense embeddings to match against. For the star-tree index question, the expected file *was* retrieved (via its prose intro chunks, MRR@5 0.20), but the Example chunk containing the complete `tableIndexConfig.starTreeIndexConfigs` JSON was not in the top-20 candidates at all — so the LLM produced an incomplete response with a placeholder instead of real config.
+**Problem 1 — Config table columns break property-value association**: Pinot's config reference docs use markdown tables with property names, default values, and descriptions in separate columns. When chunked, the semantic link between a property and its default value is lost. A query for the default broker port retrieved chunks from `broker.md` containing port-related properties but with empty default columns; the chunk containing the answer (8099) used different vocabulary ("deprecated", "legacy") and was never retrieved.
 
-**Problem 2 — Config table columns break property-value association**: Pinot's config reference docs use markdown tables with property names, default values, and descriptions in separate columns. When chunked, the semantic link between a property and its default value is lost. A query for the default broker port retrieved chunks from `broker.md` containing port-related properties but with empty default columns; the chunk containing the answer (8099) used different vocabulary ("deprecated", "legacy") and was never retrieved.
+**Problem 2 — Code blocks lack retrieval signal**: a code-heavy chunk has minimal prose for BM25 or dense embeddings to match against. For the star-tree index question, the expected file *was* retrieved (via its prose intro chunks, MRR@5 0.20), but the Example chunk containing the complete `tableIndexConfig.starTreeIndexConfigs` JSON was not in the top-20 candidates at all — so the LLM produced an incomplete response with a placeholder instead of real config.
 
 **Three fixes applied at ingestion time:**
 
@@ -99,7 +76,33 @@ Two classes of retrieval problems emerged during evaluation, each requiring a di
    ```
    This gives hybrid search enough natural-language signal to retrieve the chunk. Before automating the approach, the annotation was hand-crafted and manually confirmed: the annotated chunk was retrieved by hybrid search and ranked first by the cross-encoder (score 8.715) simultaneously.
 
+**Embedding** — each processed chunk is encoded into two representations before being stored in Qdrant: a dense vector (`BAAI/bge-base-en-v1.5`, 768 dims, FastEmbed) for semantic similarity and a sparse BM25 vector (`Qdrant/bm25`, FastEmbed) for keyword matching. The dense model is configurable (e.g. `all-MiniLM-L6-v2` for speed, `text-embedding-3-small` for higher quality); changing it requires re-ingesting since vector dimensions are fixed at collection creation.
+
 Retrieval quality problems are often ingestion problems masquerading as chunking, embedding, or ranking issues.
+
+
+### Retrieval Pipeline: Two-Stage Hybrid Search + Cross-Encoder Reranking
+
+Apache Pinot's documentation is dense with technical vocabulary: exact config keys (`pinot.broker.client.queryPort`), class names (`RealtimeToOfflineSegmentsTask`), and numeric constants. Semantic-only search misses exact term matches; keyword-only search misses paraphrased queries. Both are required.
+
+**Stage 1 — Hybrid retrieval (top 20 candidates)**
+
+Each query is encoded into two representations simultaneously:
+
+- **Dense vector** (`BAAI/bge-base-en-v1.5`, 768 dims, FastEmbed) — captures semantic meaning; finds "what port does the broker listen on?" even if the docs say "broker query port"
+- **Sparse vector** (`Qdrant/bm25`, FastEmbed) — captures exact term overlap; critical for config keys and class names that semantic models may not distinguish
+
+Qdrant's native Reciprocal Rank Fusion (RRF) merges the two ranked lists. Chunks that rank well in both lists rise to the top; chunks present in only one are demoted. No manual score normalization.
+
+**Stage 2 — Cross-encoder reranking (top 20 → top 5)**
+
+Bi-encoders (used in Stage 1) embed query and document independently — fast at scale, but imprecise. A cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`) scores each (query, chunk) pair jointly, attending to interactions between the two. More accurate, but too slow to run against the full collection. The 20→5 funnel gets both: fast broad retrieval, then precise reranking on a small candidate set.
+
+```
+User query
+    ├── dense embed ──→ top 20 by cosine ──┐
+    └── BM25 encode  ──→ top 20 by BM25  ──┴── RRF → top 20 → cross-encoder → top 5 → LLM
+```
 
 ### Evaluation: Golden Set, Baselines, and V1 Results
 
