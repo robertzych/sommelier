@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "sommelier": {
+      "command": "/Users/robertzych/.local/bin/uv",
+      "args": [
+        "run",
+        "--directory",
+        "/Users/robertzych/dev/sommelier",
+        "sommelier-mcp"
+      ]
+    }
+  }
+}
