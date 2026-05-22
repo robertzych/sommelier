@@ -834,6 +834,9 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 2. Publish to PyPI: `uv publish`; verify `uv tool install sommelier` works end-to-end on a clean environment
 3. Update `README.md`: add PyPI install instructions
 
+### Data Distribution
+1. Migrate `qdrant_storage/` to Git LFS: run `git lfs install`, `git lfs track "qdrant_storage/**"`, commit `.gitattributes`, re-add `qdrant_storage/`. Eliminates git history bloat from binary re-indexing commits — each update replaces the LFS pointer rather than adding a new full copy to object history. GitHub LFS quota: 1 GB storage + 1 GB bandwidth/month free; upgrade if re-indexing frequency exceeds that.
+
 
 ## Completed Steps (in order)
 

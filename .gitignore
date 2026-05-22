@@ -9,8 +9,6 @@ build/
 # Virtual environment
 .venv/
 
-# Qdrant local storage
-qdrant_storage/
 
 # Traces and logs
 *.jsonl

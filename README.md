@@ -14,7 +14,6 @@ A locally-run RAG assistant for Apache Pinot, available as an MCP server for Cla
 git clone https://github.com/robertzych/sommelier.git && cd sommelier
 uv sync
 cp sommelier.toml.example sommelier.toml   # then add your ANTHROPIC_API_KEY
-bash scripts/download_data.sh              # download pre-built Qdrant data (~26 MB)
 uv run sommelier query "What is the default broker port?"
 ```
 
@@ -139,7 +138,7 @@ cd sommelier
 uv sync
 ```
 
-`uv sync` downloads all Python dependencies into an isolated virtual environment. FastEmbed ONNX models are downloaded on first use (not at install time).
+`uv sync` downloads all Python dependencies into an isolated virtual environment. FastEmbed ONNX models are downloaded on first use (not at install time). Pre-built Qdrant data is included in the repo — no separate download needed.
 
 **2. Configure**
 
@@ -154,14 +153,6 @@ Edit `sommelier.toml` and set your API key:
 model = "anthropic/claude-haiku-4-5-20251001"
 api_key = "sk-ant-..."   # or export ANTHROPIC_API_KEY in your shell
 ```
-
-**3. Download pre-built data**
-
-```bash
-bash scripts/download_data.sh
-```
-
-This downloads `qdrant_storage.zip` from the latest GitHub release and extracts it to `qdrant_storage/`. Skip this step if you plan to [run ingestion yourself](#running-ingestion).
 
 ---
 
@@ -272,11 +263,7 @@ cd pinot-docs && git pull && cd ..
 uv run sommelier ingest --docs-path /path/to/pinot-docs --version latest
 ```
 
-Subsequent runs skip unchanged chunks — only modified or new content is re-embedded. To create a new `qdrant_storage.zip` for distribution:
-
-```bash
-bash scripts/create_data_zip.sh
-```
+Subsequent runs skip unchanged chunks — only modified or new content is re-embedded. After re-indexing, commit the updated `qdrant_storage/` to make the new data available to others.
 
 ---
 
