@@ -10,10 +10,12 @@ A locally-run RAG assistant for Apache Pinot, available as an MCP server for Cla
 
 ## Quick Start
 
+**Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
+
 ```bash
 git clone https://github.com/robertzych/sommelier.git && cd sommelier
 uv sync
-cp sommelier.toml.example sommelier.toml   # then add your ANTHROPIC_API_KEY
+cp sommelier.toml.example sommelier.toml   # set inference.api_key or export ANTHROPIC_API_KEY
 uv run sommelier query "What is the default broker port?"
 ```
 
