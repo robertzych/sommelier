@@ -12,7 +12,7 @@ A locally-run RAG assistant for Apache Pinot, available as an MCP server for Cla
 
 **Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
 
-**First run only**: FastEmbed downloads the embedding (~219 MB) and reranker (~92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
+**First run only**: FastEmbed downloads the embedding (219 MB) and reranker (92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
 
 ```bash
 git clone https://github.com/robertzych/sommelier.git && cd sommelier
