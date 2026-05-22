@@ -14,7 +14,7 @@ A locally-run RAG assistant for Apache Pinot, available as an MCP server for Cla
 git clone https://github.com/robertzych/sommelier.git && cd sommelier
 uv sync
 cp sommelier.toml.example sommelier.toml   # then add your ANTHROPIC_API_KEY
-bash scripts/download_data.sh              # download pre-built Qdrant data (~200 MB)
+bash scripts/download_data.sh              # download pre-built Qdrant data (~26 MB)
 uv run sommelier query "What is the default broker port?"
 ```
 
