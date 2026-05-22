@@ -64,7 +64,7 @@ User query
 
 ### Ingestion: Contextual Chunking + LLM Code Annotation
 
-**The problem with code blocks**: cross-encoders score a (query, chunk) pair by reading the chunk text directly. A code block like a star-tree index configuration has minimal natural-language signal — the cross-encoder cannot tell what the code does. During evaluation, a correct star-tree example chunk scored below FAQ chunks (7.95 vs 5.18) and was dropped, causing a retrieval miss.
+**The problem with code blocks**: a code-heavy chunk has minimal prose for BM25 or dense embeddings to match against — the star-tree index Example chunk (a JSON config with column names like `Country`, `Browser`) was never returned by hybrid search at all, so the LLM received no concrete configuration example.
 
 **Two fixes applied to every chunk at ingestion time:**
 
@@ -82,7 +82,7 @@ User query
    Question: How do I configure a star-tree index with custom split order and sum aggregation?
    [YAML code block]
    ```
-   This gives the cross-encoder immediate natural-language signal about the code's purpose. Controlled experiment: inserting this annotation raised the star-tree chunk from below the rerank cutoff to rank 1 (cross-encoder score 8.715 vs previous <5.18).
+   This gives hybrid search enough natural-language signal to retrieve the chunk. Controlled experiment: manually scoring the unannotated chunk against the cross-encoder confirmed the problem (score <5.18 vs FAQ chunks at 7.95); after annotation, the chunk was both retrieved by hybrid search and ranked first by the cross-encoder (score 8.715) simultaneously.
 
 ### Evaluation: Golden Set, Baselines, and V1 Results
 
