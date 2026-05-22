@@ -64,29 +64,37 @@ User query
 
 ### Ingestion: Contextual Chunking + LLM Code Annotation
 
-**The problem with code blocks**: a code-heavy chunk has minimal prose for BM25 or dense embeddings to match against — the star-tree index Example chunk (a JSON config with column names like `Country`, `Browser`) was never returned by hybrid search at all, so the LLM received no concrete configuration example.
+Two classes of retrieval problems emerged during evaluation, each requiring a different ingestion fix.
 
-**Two fixes applied to every chunk at ingestion time:**
+**Problem 1 — Code blocks lack retrieval signal**: a code-heavy chunk has minimal prose for BM25 or dense embeddings to match against. For the star-tree index question, the expected file *was* retrieved (via its prose intro chunks, MRR@5 0.20), but the Example chunk containing the complete `tableIndexConfig.starTreeIndexConfigs` JSON was not in the top-20 candidates at all — so the LLM produced an incomplete response with a placeholder instead of real config.
 
-1. **Breadcrumb prepending** — the `h1 > h2 > h3` section path is prepended to each chunk before embedding:
+**Problem 2 — Config table columns break property-value association**: Pinot's config reference docs use markdown tables with property names, default values, and descriptions in separate columns. When chunked, the semantic link between a property and its default value is lost. A query for the default broker port retrieved chunks from `broker.md` containing port-related properties but with empty default columns; the chunk containing the answer (8099) used different vocabulary ("deprecated", "legacy") and was never retrieved.
+
+**Three fixes applied at ingestion time:**
+
+1. **Table normalization** — config reference tables whose second column header contains "default" are converted to prose: `"<property>: default <value>. <description>"`. This co-locates property name, default value, and description in one retrievable string. Confirmed necessary by rollback experiment: both the normalization fix and a question reword ("HTTP port" → "query port" to remove ambiguity) were required together to resolve the hallucination.
+
+2. **Breadcrumb prepending** — the `h1 > h2 > h3` section path is prepended to each chunk before embedding:
    ```
    Star-Tree Index > Configuration > Example
    [chunk text here]
    ```
    BM25 and dense embeddings now see document structure that was previously stored only as metadata. Isolation experiment: removing breadcrumbs dropped MRR from 0.77 to 0.73.
 
-2. **LLM code annotation** — for code-heavy chunks (≥50% code characters), the LLM generates a one-sentence `Description:` and one representative `Question:` inserted between the breadcrumb and the chunk body:
+3. **LLM code annotation** — for code-heavy chunks (≥50% code characters), the LLM generates a one-sentence `Description:` and one representative `Question:` inserted between the breadcrumb and the chunk body:
    ```
    Star-Tree Index > Configuration > Example
    Description: Star-tree index configuration specifying dimension split order and aggregation functions.
    Question: How do I configure a star-tree index with custom split order and sum aggregation?
-   [YAML code block]
+   [JSON code block]
    ```
-   This gives hybrid search enough natural-language signal to retrieve the chunk. Controlled experiment: manually scoring the unannotated chunk against the cross-encoder confirmed the problem (score <5.18 vs FAQ chunks at 7.95); after annotation, the chunk was both retrieved by hybrid search and ranked first by the cross-encoder (score 8.715) simultaneously.
+   This gives hybrid search enough natural-language signal to retrieve the chunk. Before automating the approach, the annotation was hand-crafted and manually confirmed: the annotated chunk was retrieved by hybrid search and ranked first by the cross-encoder (score 8.715) simultaneously.
+
+Retrieval quality problems are often ingestion problems masquerading as chunking, embedding, or ranking issues.
 
 ### Evaluation: Golden Set, Baselines, and V1 Results
 
-**Methodology**: 25 questions constructed source-first — expected doc sections are chosen before writing the questions, ensuring deliberate coverage across ingestion, indexing, querying, operations, and configuration. Five query types: how-to (8), factual (5), conceptual (4), comparison (3), new-in-2026 (5). The new-in-2026 category specifically targets features introduced after LLM training cutoffs to expose knowledge gaps.
+**Methodology**: 25 parent questions + 5 follow-up questions, constructed source-first — expected doc sections are chosen before writing the questions, ensuring deliberate coverage across ingestion, indexing, querying, operations, and configuration. Five query types: how-to (8), factual (5), conceptual (4), comparison (3), new-in-2026 (5). The new-in-2026 category specifically targets features introduced after LLM training cutoffs to expose knowledge gaps.
 
 Three baselines scored on a 3-point rubric (accuracy 0/1, completeness 0/1, citations 0/1) per question:
 
@@ -98,7 +106,9 @@ Three baselines scored on a 3-point rubric (accuracy 0/1, completeness 0/1, cita
 | docs.pinot.apache.org | 1.00 | 1.00 | 1.00 | 3.00 / 3 |
 | Claude (`claude-sonnet-4-6`) | 0.56 | 0.92 | 0.00 | 1.48 / 3 |
 
-Sommelier matches the official docs AI (2.96 vs 3.00) while running locally and integrating into Claude natively. The gap versus raw Claude is largest on new-in-2026 questions: Claude accuracy 0.00 vs Sommelier 1.00 — LLM training cutoffs are a real limitation for a fast-moving project like Pinot.
+Sommelier matches the official docs AI (2.96 vs 3.00) while integrating into Claude natively. The gap versus raw Claude is largest on new-in-2026 questions: Claude accuracy 0.00 vs Sommelier 1.00 — LLM training cutoffs are a real limitation for a fast-moving project like Pinot.
+
+Both Sommelier and the Claude baseline use models with the same August 2025 training cutoff. Sommelier uses `claude-haiku-4-5` (~3× cheaper than `claude-sonnet-4-6`) yet scores 2× better overall — demonstrating that RAG impact outweighs model size for domain-specific Q&A.
 
 **Retrieval results** (hit rate, recall, MRR, full recall at each pipeline stage):
 
