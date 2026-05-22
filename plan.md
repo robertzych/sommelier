@@ -809,9 +809,8 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 ## Next Steps (in order)
 
 ### V1 Packaging
-1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
-2. Wire `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool; internally calls the full query pipeline (retrieval + inference via `llm.py`); returns the finished LLM answer as the tool result; add `tracer.start_trace()` + `tracer.flush()` per request; the MCP client (Claude) echoes the finished answer — no second LLM generation needed
-3. Write `.claude/commands/pinot.md`: Claude Code slash command that calls `sommelier query "$1"` via Bash; multi-turn follow-ups are handled by Claude's context window, not by `sommelier`'s own memory
+1. Write `.claude/commands/pinot.md`: Claude Code slash command that calls `sommelier query "$1"` via Bash; multi-turn follow-ups are handled by Claude's context window, not by `sommelier`'s own memory
+2. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview, MCP client wiring (Claude Desktop `claude_desktop_config.json`), Claude Code skill installation (`.claude/commands/pinot.md`)
 
 ---
 
@@ -879,4 +878,7 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 
 ### Re-grade
 1. Re-graded all 25 questions after ingestion and prompt fixes: ran `sommelier query` for all 25 golden set questions, captured new answers (with updated Sources bullet-list citation format) into `evals/golden_set_regrade.json`, manually scored all 25 sommelier responses using `evals/score_review.py --file evals/golden_set_regrade.json` (docs_pinot_ai and claude scores carried forward unchanged), ran `uv run python -m evals.report --golden-set evals/golden_set_regrade.json` to regenerate `evals/results.md`. All V1 gates pass: sommelier avg 2.96/3 ✅ (was 2.84), accuracy 0.96 > 0.56 ✅, completeness 1.00 > 0.92 ✅ (was tied, now passing), citations 1.00 > 0.00 ✅. Added `--file` argument to `evals/score_review.py` so it can target any golden set file.
+
+### V1 Packaging
+1. Wire `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool in `src/mcp_server.py`; server-side `_history` list accumulates user+assistant turns across calls, capped at `memory_turns * 2`, so Sommelier's LLM has conversation context for follow-up questions. Lazy initialization — pipeline loads on first tool call, not at import. Tool docstring instructs Claude Desktop to pass questions verbatim and display responses as-is (including Sources). `sommelier-mcp` script entry added to `pyproject.toml`. Claude Desktop config: `command = uv run --directory <repo> sommelier-mcp` with `ANTHROPIC_API_KEY` in `env`. Setting "For any Apache Pinot question, always use the search_pinot tool" in Claude Desktop's global instructions eliminates the need to prefix queries with an explicit tool request. 6 tests in `tests/test_mcp_server.py`.
 

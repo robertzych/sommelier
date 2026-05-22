@@ -20,6 +20,7 @@ cohere = ["cohere>=5.0.0"]
 
 [project.scripts]
 sommelier = "cli:main"
+sommelier-mcp = "mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -32,7 +33,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools]
-py-modules = ["cli"]
+py-modules = ["cli", "mcp_server"]
 
 [dependency-groups]
 dev = [
