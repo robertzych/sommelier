@@ -39,7 +39,19 @@ Sommelier addresses both: it retrieves the relevant doc sections in real time, d
 
 ![Sommelier Architecture Diagram](Sommelier%20Architecture%20Diagram.png)
 
-### Ingestion Pipeline: Incremental Updates + Contextual Chunking + LLM Code Annotation
+### Ingestion Pipeline
+
+**Markdown table normalization** — Pinot's config reference docs store property names, default values, and descriptions in separate markdown columns; when chunked, the semantic link between a property and its default is lost. A query for the default broker port retrieved chunks from `broker.md` with empty default columns — the chunk containing the answer (8099) used different vocabulary ("deprecated", "legacy") and was never retrieved. Fix: tables whose second column header contains "default" are converted to prose — `"<property>: default <value>. <description>"` — co-locating all three in one retrievable string.
+
+**LLM code annotation** — A code-heavy chunk has minimal prose for BM25 or dense embeddings to match against; for the star-tree index question, the file was retrieved via its prose intro chunks (MRR@5 0.20) but the Example chunk containing the complete `tableIndexConfig.starTreeIndexConfigs` JSON was not in the top-20 candidates at all, causing the LLM to respond with a placeholder instead of real config. Fix: for code-heavy chunks (≥50% code characters), the LLM generates a one-sentence `Description:` and one representative `Question:` inserted between a section breadcrumb and the chunk body — giving hybrid search the natural-language signal needed to retrieve it:
+   ```
+   Star-Tree Index > Configuration > Example
+   Description: Star-tree index configuration specifying dimension split order and aggregation functions.
+   Question: How do I configure a star-tree index with custom split order and sum aggregation?
+   [JSON code block]
+   ```
+
+**Embedding** — each processed chunk is encoded into two representations before being stored in Qdrant: a dense vector (`BAAI/bge-base-en-v1.5`, 768 dims, FastEmbed) for semantic similarity and a sparse BM25 vector (`Qdrant/bm25`, FastEmbed) for keyword matching. The dense model is configurable (e.g. `all-MiniLM-L6-v2` for speed, `text-embedding-3-small` for higher quality); changing it requires re-ingesting since vector dimensions are fixed at collection creation.
 
 **Incremental updates** (`src/ingestion/ingest.py`): Point IDs are SHA-256 content hashes of the chunk text, cast to UUIDs — deterministic and unique per chunk. When a doc file changes, modified chunks get new IDs; the old IDs become orphans. Per file: scroll existing point IDs, diff against new, delete orphans, insert new. Unchanged chunks (same ID already in Qdrant) are skipped entirely. No updates — only inserts and deletes.
 
@@ -49,36 +61,6 @@ File modified  → old IDs deleted + new IDs inserted
 File deleted   → old IDs deleted
 New file       → all IDs inserted
 ```
-
-Two classes of retrieval problems emerged during evaluation, each requiring a different ingestion fix.
-
-**Problem 1 — Config table columns break property-value association**: Pinot's config reference docs use markdown tables with property names, default values, and descriptions in separate columns. When chunked, the semantic link between a property and its default value is lost. A query for the default broker port retrieved chunks from `broker.md` containing port-related properties but with empty default columns; the chunk containing the answer (8099) used different vocabulary ("deprecated", "legacy") and was never retrieved.
-
-**Problem 2 — Code blocks lack retrieval signal**: a code-heavy chunk has minimal prose for BM25 or dense embeddings to match against. For the star-tree index question, the expected file *was* retrieved (via its prose intro chunks, MRR@5 0.20), but the Example chunk containing the complete `tableIndexConfig.starTreeIndexConfigs` JSON was not in the top-20 candidates at all — so the LLM produced an incomplete response with a placeholder instead of real config.
-
-**Three fixes applied at ingestion time:**
-
-1. **Table normalization** — config reference tables whose second column header contains "default" are converted to prose: `"<property>: default <value>. <description>"`. This co-locates property name, default value, and description in one retrievable string. Confirmed necessary by rollback experiment: both the normalization fix and a question reword ("HTTP port" → "query port" to remove ambiguity) were required together to resolve the hallucination.
-
-2. **Breadcrumb prepending** — the `h1 > h2 > h3` section path is prepended to each chunk before embedding:
-   ```
-   Star-Tree Index > Configuration > Example
-   [chunk text here]
-   ```
-   BM25 and dense embeddings now see document structure that was previously stored only as metadata. Isolation experiment: removing breadcrumbs dropped MRR from 0.77 to 0.73.
-
-3. **LLM code annotation** — for code-heavy chunks (≥50% code characters), the LLM generates a one-sentence `Description:` and one representative `Question:` inserted between the breadcrumb and the chunk body:
-   ```
-   Star-Tree Index > Configuration > Example
-   Description: Star-tree index configuration specifying dimension split order and aggregation functions.
-   Question: How do I configure a star-tree index with custom split order and sum aggregation?
-   [JSON code block]
-   ```
-   This gives hybrid search enough natural-language signal to retrieve the chunk. Before automating the approach, the annotation was hand-crafted and manually confirmed: the annotated chunk was retrieved by hybrid search and ranked first by the cross-encoder (score 8.715) simultaneously.
-
-**Embedding** — each processed chunk is encoded into two representations before being stored in Qdrant: a dense vector (`BAAI/bge-base-en-v1.5`, 768 dims, FastEmbed) for semantic similarity and a sparse BM25 vector (`Qdrant/bm25`, FastEmbed) for keyword matching. The dense model is configurable (e.g. `all-MiniLM-L6-v2` for speed, `text-embedding-3-small` for higher quality); changing it requires re-ingesting since vector dimensions are fixed at collection creation.
-
-Retrieval quality problems are often ingestion problems masquerading as chunking, embedding, or ranking issues.
 
 
 ### Retrieval Pipeline: Two-Stage Hybrid Search + Cross-Encoder Reranking
