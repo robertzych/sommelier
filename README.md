@@ -124,7 +124,7 @@ Full per-question breakdown: [evals/results.md](evals/results.md)
 
 ### MCP Server
 
-**MCP server** (`src/mcp_server.py`): Sommelier runs as a persistent process, so the pipeline is initialized lazily on the first tool call rather than at import time — ONNX model loads (~2s) happen once and are amortized across all subsequent queries. A server-side `_history` list accumulates user/assistant turns across MCP calls, capped at `memory_turns * 2`, giving follow-up questions full conversation context. The tool docstring doubles as a behavior contract: it instructs Claude to pass the user's question verbatim (no paraphrasing) and display the response exactly as returned.
+**MCP server** (`src/mcp_server.py`): Sommelier runs as a persistent process, so the pipeline is initialized lazily on the first tool call rather than at import time — ONNX model loads happen once and are amortized across all subsequent queries. A server-side `_history` list accumulates user/assistant turns across MCP calls, capped at `memory_turns * 2`, giving follow-up questions full conversation context. The tool docstring doubles as a behavior contract: it instructs Claude to pass the user's question verbatim (no paraphrasing) and display the response exactly as returned.
 
 ---
 
@@ -190,14 +190,6 @@ uv run sommelier query "What is the default broker port?"
 ```bash
 uv run sommelier chat
 ```
-
-**Filter by Pinot version:**
-
-```bash
-uv run sommelier query "How do I configure upsert?" --version 1.2
-```
-
-Version filtering restricts retrieval to chunks indexed under that version tag. Use `latest` (or omit `--version`) for the most recent indexed docs.
 
 ---
 
