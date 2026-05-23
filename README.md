@@ -128,6 +128,17 @@ Full per-question breakdown: [evals/results.md](evals/results.md)
 
 ---
 
+## Roadmap
+
+- **Latency** — End-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2s). The FastEmbed cross-encoder is the primary bottleneck; candidates to explore: reduce `retrieval_top_k` from 20→10 (halves reranker inference time if hit rate holds), switch to Cohere Rerank (single HTTP call vs local ONNX), profile to separate ONNX model-load time from inference time (load is amortized in the MCP server's persistent process).
+- **Retrieval quality** — q015 is a known reranker miss: the expected source reaches candidates@20 at rank 1 but is dropped by the cross-encoder. Candidates: `rerank_top_k=7` as a zero-cost mitigation, Cohere Rerank as a higher-quality alternative.
+- **LLM judge** — Automate eval scoring with a LiteLLM judge (`--judge claude` mode in `eval.py`) to enable regression detection on every prompt or ingestion change. Validate automated scores against the manual baseline before trusting them.
+- **Observability CLI** — `sommelier logs --review`: lists recent query traces with retrieved file paths and latency; `p` promotes a query to the golden set (pre-fills `expected_sources` from reranked results), `n` skips, `q` quits.
+- **PyPI** — `uv publish` so users can `uv tool install sommelier` without cloning the repo.
+- **Git LFS** — Migrate `qdrant_storage/` to Git LFS to avoid history bloat from binary re-indexing commits.
+
+---
+
 ## Environment Setup
 
 **Prerequisites**: [git](https://git-scm.com/), [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY` (or another [LiteLLM-supported](https://docs.litellm.ai/docs/providers) provider — see [Configuration Reference](#configuration-reference)).
