@@ -205,7 +205,7 @@ Open `~/Library/Application Support/Claude/claude_desktop_config.json` (create i
 {
   "mcpServers": {
     "sommelier": {
-      "command": "/Users/yourname/.local/bin/uv",
+      "command": "uv",
       "args": [
         "run",
         "--directory",
@@ -220,7 +220,7 @@ Open `~/Library/Application Support/Claude/claude_desktop_config.json` (create i
 }
 ```
 
-Find your `uv` path with `which uv`. Update `--directory` to the absolute path of the cloned repo.
+Update `--directory` to the absolute path of the cloned repo.
 
 **3. Add a global instruction to Claude Desktop**
 
@@ -245,7 +245,7 @@ Ask any Apache Pinot question. You should see a tool call to `search_pinot` and 
 {
   "mcpServers": {
     "sommelier": {
-      "command": "/Users/yourname/.local/bin/uv",
+      "command": "uv",
       "args": ["run", "--directory", "/where/you/cloned/sommelier", "sommelier-mcp"]
     }
   }
