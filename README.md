@@ -209,7 +209,7 @@ Open `~/Library/Application Support/Claude/claude_desktop_config.json` (create i
       "args": [
         "run",
         "--directory",
-        "/Users/yourname/dev/sommelier",
+        "/where/you/cloned/sommelier",
         "sommelier-mcp"
       ],
       "env": {
@@ -246,7 +246,7 @@ Ask any Apache Pinot question. You should see a tool call to `search_pinot` and 
   "mcpServers": {
     "sommelier": {
       "command": "/Users/yourname/.local/bin/uv",
-      "args": ["run", "--directory", "/Users/yourname/dev/sommelier", "sommelier-mcp"]
+      "args": ["run", "--directory", "/where/you/cloned/sommelier", "sommelier-mcp"]
     }
   }
 }
