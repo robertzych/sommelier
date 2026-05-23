@@ -66,7 +66,7 @@ New file       → all IDs inserted
 
 **Why Qdrant** — Three constraints drove the choice: hybrid search (BM25 + semantic) was required from the start given Pinot's technical vocabulary; FastEmbed should work without API keys; and incremental updates via content hash need robust upsert semantics. ChromaDB was ruled out — it has no native hybrid search, so implementing it would have required a separate BM25 index, custom score fusion, and two indexes to keep in sync on every incremental update. Qdrant covers all three in one client: native sparse+dense vectors with Reciprocal Rank Fusion (no manual score normalization), built-in FastEmbed integration, and a local embedded mode (`QdrantClient(path="./qdrant_storage")`) that runs with no server or Docker — just the Python client — while using the same API as a self-hosted or cloud instance.
 
-### Retrieval Pipeline: Two-Stage Hybrid Search + Cross-Encoder Reranking
+### Retrieval Pipeline
 
 Apache Pinot's documentation is dense with technical vocabulary: exact config keys (`pinot.broker.client.queryPort`), class names (`RealtimeToOfflineSegmentsTask`), and numeric constants. Semantic-only search misses exact term matches; keyword-only search misses paraphrased queries. Both are required.
 
@@ -88,6 +88,10 @@ User query
     ├── dense embed ──→ top 20 by cosine ──┐
     └── BM25 encode  ──→ top 20 by BM25  ──┴── RRF → top 20 → cross-encoder → top 5 → LLM
 ```
+
+**System prompt** — The system prompt (`prompts/system_prompt.md`, tracked in git) governs how the LLM uses retrieved chunks. Key constraints: answers are scoped strictly to Apache Pinot; config keys, class names, and port numbers are only cited if they appear verbatim in the retrieved context — no fabrication; if the retrieved context is incomplete, the response explicitly notes the coverage gap rather than filling it with training data. The user message pairs numbered context blocks (file path + section breadcrumb + chunk text) with the active Pinot version and the user's question.
+
+Every trace logs a `prompt_version` field — a SHA-256 content hash of `system_prompt.md` — so eval score changes can be correlated to specific prompt edits without relying on git history.
 
 ### Evaluation: Golden Set, Baselines, and V1 Results
 
