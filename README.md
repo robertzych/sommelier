@@ -238,10 +238,17 @@ Ask any Apache Pinot question. You should see a tool call to `search_pinot` and 
 
 ## Using Sommelier with Claude Code
 
-`.mcp.json` and `.claude/settings.json` are already in the repo — no manual configuration required when working inside the `sommelier/` directory.
+**1. Complete [Environment Setup](#environment-setup) (steps 1–2)**
+
+**2. Create `.mcp.json` from the example**
+
+```bash
+cp .mcp.json.example .mcp.json
+```
+
+Edit `.mcp.json` and set `--directory` to the absolute path of the cloned repo:
 
 ```json
-// .mcp.json (already committed)
 {
   "mcpServers": {
     "sommelier": {
@@ -254,7 +261,7 @@ Ask any Apache Pinot question. You should see a tool call to `search_pinot` and 
 
 Claude Code inherits `ANTHROPIC_API_KEY` from your shell, so no `env` block is needed. Open a Claude Code session in the `sommelier/` directory and ask any Apache Pinot question — the tool is called automatically. Follow-up questions carry full conversation context.
 
-**Using Sommelier in other projects**: copy `.mcp.json` and `.claude/settings.json` to that project's root directory and update the `--directory` path.
+**Using Sommelier in other projects**: copy `.mcp.json.example` and `.claude/settings.json` to that project's root directory, rename to `.mcp.json`, and update `--directory` to point to your Sommelier clone.
 
 ---
 

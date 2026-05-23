@@ -16,6 +16,7 @@ build/
 
 # Config with secrets
 sommelier.toml
+.mcp.json
 
 # Backups
 *.bak

@@ -1,11 +1,11 @@
 {
   "mcpServers": {
     "sommelier": {
-      "command": "/Users/robertzych/.local/bin/uv",
+      "command": "uv",
       "args": [
         "run",
         "--directory",
-        "/Users/robertzych/dev/sommelier",
+        "/where/you/cloned/sommelier",
         "sommelier-mcp"
       ]
     }
