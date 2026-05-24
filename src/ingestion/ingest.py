@@ -211,9 +211,13 @@ class LLMCodeAnnotator:
     def __init__(self, model: str, api_key: str = "") -> None:
         self._model = model
         self._api_key = api_key
+        self.call_count = 0
+        self.total_latency_ms = 0.0
 
     def annotate(self, chunk_text: str) -> str:
         """Return 'Description: ...\\nQuestion: ...' or empty string on failure."""
+        import time
+
         import litellm
 
         prompt = _ANNOTATION_PROMPT.format(chunk_text=chunk_text[:3000])
@@ -225,6 +229,7 @@ class LLMCodeAnnotator:
         }
         if self._api_key:
             kwargs["api_key"] = self._api_key
+        t0 = time.perf_counter()
         try:
             response = litellm.completion(**kwargs)
             text = response.choices[0].message.content.strip()
@@ -232,6 +237,9 @@ class LLMCodeAnnotator:
                 return text
         except Exception:
             pass
+        finally:
+            self.total_latency_ms += (time.perf_counter() - t0) * 1000
+            self.call_count += 1
         return ""
 
 
@@ -442,3 +450,10 @@ def ingest(
         f"{totals['skipped']} skipped, "
         f"{totals['errors']} errors"
     )
+    if annotator is not None and annotator.call_count > 0:
+        avg_ms = annotator.total_latency_ms / annotator.call_count
+        print(
+            f"Annotations: {annotator.call_count} chunks, "
+            f"{annotator.total_latency_ms / 1000:.1f}s total, "
+            f"{avg_ms:.0f}ms avg"
+        )

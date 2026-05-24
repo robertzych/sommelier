@@ -7,6 +7,7 @@ from langchain_core.documents import Document
 
 from embeddings.provider import BM25Provider, FastEmbedProvider
 from ingestion.ingest import (
+    LLMCodeAnnotator,
     _build_breadcrumb,
     _chunk_markdown,
     _insert_annotation,
@@ -380,18 +381,78 @@ class TestInsertAnnotation:
         assert result == "Breadcrumb\n\nDescription: D. Question: Q?\n\nBody text."
 
 
+class TestLLMCodeAnnotatorTracking:
+    """Unit tests for LLMCodeAnnotator call_count and total_latency_ms tracking."""
+
+    def test_initial_counters_are_zero(self):
+        """call_count and total_latency_ms start at zero before any calls."""
+        ann = LLMCodeAnnotator(model="openai/gpt-4o-mini")
+        assert ann.call_count == 0
+        assert ann.total_latency_ms == 0.0
+
+    def test_call_count_increments_on_each_call(self, monkeypatch):
+        """call_count increments by 1 for each annotate() invocation."""
+        ann = LLMCodeAnnotator(model="openai/gpt-4o-mini")
+
+        class _FakeResponse:
+            choices = [types.SimpleNamespace(message=types.SimpleNamespace(
+                content="Description: X.\nQuestion: Y?"
+            ))]
+
+        def _fake_completion(**kwargs):
+            return _FakeResponse()
+
+        monkeypatch.setattr("litellm.completion", _fake_completion)
+        ann.annotate("some code")
+        ann.annotate("more code")
+        assert ann.call_count == 2
+
+    def test_total_latency_ms_accumulates(self, monkeypatch):
+        """total_latency_ms is positive and grows after each call."""
+        ann = LLMCodeAnnotator(model="openai/gpt-4o-mini")
+
+        class _FakeResponse:
+            choices = [types.SimpleNamespace(message=types.SimpleNamespace(
+                content="Description: X.\nQuestion: Y?"
+            ))]
+
+        def _fake_completion(**kwargs):
+            return _FakeResponse()
+
+        monkeypatch.setattr("litellm.completion", _fake_completion)
+        ann.annotate("chunk one")
+        after_one = ann.total_latency_ms
+        ann.annotate("chunk two")
+        assert ann.total_latency_ms >= after_one > 0
+
+    def test_call_count_increments_even_on_failure(self, monkeypatch):
+        """call_count and total_latency_ms are updated even when the LLM call raises."""
+        ann = LLMCodeAnnotator(model="openai/gpt-4o-mini")
+
+        def _raise(**kwargs):
+            raise RuntimeError("network error")
+
+        monkeypatch.setattr("litellm.completion", _raise)
+        result = ann.annotate("code")
+        assert result == ""
+        assert ann.call_count == 1
+        assert ann.total_latency_ms >= 0
+
+
 class _StubAnnotator:
     """Stub annotator that counts calls and returns a fixed annotation without calling any LLM."""
 
     ANNOTATION = "Description: Code example.\nQuestion: How do you configure this?"
 
     def __init__(self):
-        """Initialise call counter."""
+        """Initialise call counter and latency accumulator."""
         self.call_count = 0
+        self.total_latency_ms = 0.0
 
     def annotate(self, chunk_text: str) -> str:
         """Return a fixed annotation and increment the call counter."""
         self.call_count += 1
+        self.total_latency_ms += 10.0
         return self.ANNOTATION
 
 
