@@ -434,17 +434,21 @@ class TestChunkMarkdownContextual:
 class TestDerivePointId:
     """Unit tests for derive_point_id: verify content-hash-based deduplication."""
 
-    def test_same_text_gives_same_id(self):
-        """Identical text always produces the same UUID (stable dedup key)."""
-        assert derive_point_id("hello world") == derive_point_id("hello world")
+    def test_same_text_and_path_gives_same_id(self):
+        """Identical text and file_path always produces the same UUID (stable dedup key)."""
+        assert derive_point_id("hello world", "a.md") == derive_point_id("hello world", "a.md")
 
     def test_different_text_gives_different_id(self):
         """Different text produces different UUIDs."""
-        assert derive_point_id("hello world") != derive_point_id("goodbye world")
+        assert derive_point_id("hello world", "a.md") != derive_point_id("goodbye world", "a.md")
+
+    def test_same_text_different_file_gives_different_id(self):
+        """Identical chunk text in different files produces different UUIDs."""
+        assert derive_point_id("hello world", "a.md") != derive_point_id("hello world", "b.md")
 
     def test_returns_uuid(self):
         """Output is always a uuid.UUID instance."""
-        assert isinstance(derive_point_id("some text"), uuid.UUID)
+        assert isinstance(derive_point_id("some text", "a.md"), uuid.UUID)
 
 
 # ── Integration tests for index_file ─────────────────────────────────────────

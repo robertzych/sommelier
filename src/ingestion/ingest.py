@@ -88,9 +88,12 @@ def normalize_tables(text: str) -> str:
     return "".join(result)
 
 
-def derive_point_id(chunk_text: str) -> uuid.UUID:
-    """Return a deterministic UUID derived from the SHA-256 hash of chunk_text."""
-    digest = hashlib.sha256(chunk_text.encode()).digest()[:16]
+def derive_point_id(chunk_text: str, file_path: str) -> uuid.UUID:
+    """Return a deterministic UUID derived from the SHA-256 hash of file_path + chunk_text.
+
+    Including file_path prevents ID collisions when two files contain identical chunk text.
+    """
+    digest = hashlib.sha256((file_path + "\n" + chunk_text).encode()).digest()[:16]
     return uuid.UUID(bytes=digest)
 
 
@@ -282,7 +285,7 @@ def index_file(
     chunks = _chunk_markdown(raw_markdown)
     chunk_texts = [c.page_content for c in chunks]
 
-    new_points = {derive_point_id(t): (t, c) for t, c in zip(chunk_texts, chunks)}
+    new_points = {derive_point_id(t, file_path): (t, c) for t, c in zip(chunk_texts, chunks)}
 
     # collect existing point IDs for this file (paginate to handle large files)
     old_ids: set[uuid.UUID] = set()
