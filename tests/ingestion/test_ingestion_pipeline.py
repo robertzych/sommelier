@@ -17,7 +17,6 @@ from ingestion.ingest import (
     index_file,
     ingest,
     normalize_tables,
-    LLMCodeAnnotator,
 )
 from vector_store.qdrant_store import PINOT_DOCS_COLLECTION, ensure_collection, get_client
 
@@ -382,52 +381,18 @@ class TestInsertAnnotation:
 
 
 class _StubAnnotator:
-    """Stub annotator that returns a fixed annotation without calling any LLM."""
+    """Stub annotator that counts calls and returns a fixed annotation without calling any LLM."""
 
     ANNOTATION = "Description: Code example.\nQuestion: How do you configure this?"
 
+    def __init__(self):
+        """Initialise call counter."""
+        self.call_count = 0
+
     def annotate(self, chunk_text: str) -> str:
-        """Return a fixed annotation regardless of chunk content."""
+        """Return a fixed annotation and increment the call counter."""
+        self.call_count += 1
         return self.ANNOTATION
-
-
-class TestChunkMarkdownWithAnnotator:
-    """Unit tests for _chunk_markdown annotator integration."""
-
-    def test_annotation_inserted_into_code_heavy_chunks(self):
-        """Code-heavy chunks receive the annotation between breadcrumb and body."""
-        md = "# Indexing\n\n## Star-tree\n\nShort intro.\n\n```json\n" + ("x" * 300) + "\n```"
-        chunks = _chunk_markdown(md, annotator=_StubAnnotator())
-        code_heavy = [
-            c for c in chunks
-            if "```" in c.page_content and _StubAnnotator.ANNOTATION in c.page_content
-        ]
-        assert len(code_heavy) >= 1
-
-    def test_prose_chunks_not_annotated(self):
-        """Chunks with no fenced code blocks are not passed to the annotator."""
-        md = "# Concepts\n\n## Table\n\nApache Pinot has two main table types: offline and realtime."
-        chunks = _chunk_markdown(md, annotator=_StubAnnotator())
-        annotated = [c for c in chunks if _StubAnnotator.ANNOTATION in c.page_content]
-        assert len(annotated) == 0
-
-    def test_annotation_position_between_breadcrumb_and_body(self):
-        """Annotation appears after the breadcrumb and before the code content."""
-        md = "# Indexing\n\n## Star-tree\n\nIntro.\n\n```json\n" + ("x" * 300) + "\n```"
-        chunks = _chunk_markdown(md, annotator=_StubAnnotator())
-        for chunk in chunks:
-            if _StubAnnotator.ANNOTATION in chunk.page_content:
-                lines = chunk.page_content.split("\n\n")
-                # breadcrumb first, annotation second
-                assert "Indexing" in lines[0]
-                assert _StubAnnotator.ANNOTATION in lines[1]
-
-    def test_no_annotator_leaves_chunks_unchanged(self):
-        """When annotator=None, no annotation is inserted."""
-        md = "# Indexing\n\n## Star-tree\n\nIntro.\n\n```json\n" + ("x" * 300) + "\n```"
-        chunks = _chunk_markdown(md, annotator=None)
-        annotated = [c for c in chunks if "Description:" in c.page_content]
-        assert len(annotated) == 0
 
 
 class TestChunkMarkdownContextual:
@@ -590,6 +555,71 @@ class TestIndexFile:
         second = _run_index(client, dense, sparse, raw_markdown="")
         assert second["deleted"] == first["inserted"]
         assert second["inserted"] == 0
+
+    def test_annotates_new_code_heavy_chunks(self, collection_context):
+        """New code-heavy chunks are annotated; the stored text contains the annotation."""
+        client, dense, sparse = collection_context
+        md = "# Indexing\n\n## Star-tree\n\nIntro.\n\n```json\n" + ("x" * 300) + "\n```"
+        annotator = _StubAnnotator()
+        index_file(
+            client=client,
+            collection_name=PINOT_DOCS_COLLECTION,
+            file_path="test.md",
+            raw_markdown=md,
+            dense_provider=dense,
+            sparse_provider=sparse,
+            pinot_version="latest",
+            annotator=annotator,
+        )
+        assert annotator.call_count >= 1
+        records, _ = client.scroll(PINOT_DOCS_COLLECTION, with_payload=True, limit=100)
+        annotated = [r for r in records if _StubAnnotator.ANNOTATION in r.payload.get("text", "")]
+        assert len(annotated) >= 1
+
+    def test_skips_annotation_for_existing_code_heavy_chunks(self, collection_context):
+        """Re-indexing unchanged content does not call the annotator again."""
+        client, dense, sparse = collection_context
+        md = "# Indexing\n\n## Star-tree\n\nIntro.\n\n```json\n" + ("x" * 300) + "\n```"
+        annotator = _StubAnnotator()
+        index_file(
+            client=client,
+            collection_name=PINOT_DOCS_COLLECTION,
+            file_path="test.md",
+            raw_markdown=md,
+            dense_provider=dense,
+            sparse_provider=sparse,
+            pinot_version="latest",
+            annotator=annotator,
+        )
+        calls_after_first_run = annotator.call_count
+        index_file(
+            client=client,
+            collection_name=PINOT_DOCS_COLLECTION,
+            file_path="test.md",
+            raw_markdown=md,
+            dense_provider=dense,
+            sparse_provider=sparse,
+            pinot_version="latest",
+            annotator=annotator,
+        )
+        assert annotator.call_count == calls_after_first_run
+
+    def test_prose_chunks_not_annotated(self, collection_context):
+        """Prose-only chunks are never passed to the annotator."""
+        client, dense, sparse = collection_context
+        md = "# Concepts\n\n## Table\n\nApache Pinot has two main table types: offline and realtime."
+        annotator = _StubAnnotator()
+        index_file(
+            client=client,
+            collection_name=PINOT_DOCS_COLLECTION,
+            file_path="test.md",
+            raw_markdown=md,
+            dense_provider=dense,
+            sparse_provider=sparse,
+            pinot_version="latest",
+            annotator=annotator,
+        )
+        assert annotator.call_count == 0
 
 
 # ── Integration test for ingest() ────────────────────────────────────────────

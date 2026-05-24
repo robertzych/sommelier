@@ -240,7 +240,7 @@ def _insert_annotation(text: str, annotation: str) -> str:
     return annotation + "\n\n" + text
 
 
-def _chunk_markdown(raw_markdown: str, annotator: "LLMCodeAnnotator | None" = None):
+def _chunk_markdown(raw_markdown: str):
     """Clean and split a markdown document into header-aware, size-bounded chunks."""
     md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS)
     cleaned = normalize_tables(clean_gitbook(raw_markdown))
@@ -256,16 +256,6 @@ def _chunk_markdown(raw_markdown: str, annotator: "LLMCodeAnnotator | None" = No
         breadcrumb = _build_breadcrumb(doc.metadata)
         if breadcrumb:
             doc.page_content = breadcrumb + "\n\n" + doc.page_content
-
-    # For code-heavy chunks, generate a natural-language description and question
-    # via LLM and insert them after the breadcrumb so the cross-encoder reranker
-    # immediately sees signal about the code's purpose.
-    if annotator is not None:
-        for doc in char_splits:
-            if _is_code_heavy(doc.page_content):
-                annotation = annotator.annotate(doc.page_content)
-                if annotation:
-                    doc.page_content = _insert_annotation(doc.page_content, annotation)
 
     return char_splits
 
@@ -287,7 +277,9 @@ def index_file(
 
     Returns a dict with keys: inserted, deleted, skipped, errors.
     """
-    chunks = _chunk_markdown(raw_markdown, annotator=annotator)
+    # Point IDs are derived from pre-annotation text so that unchanged chunks
+    # retain the same ID across runs regardless of LLM annotation variability.
+    chunks = _chunk_markdown(raw_markdown)
     chunk_texts = [c.page_content for c in chunks]
 
     new_points = {derive_point_id(t): (t, c) for t, c in zip(chunk_texts, chunks)}
@@ -320,6 +312,18 @@ def index_file(
 
     # embed and insert only chunks not already in the collection
     to_insert = {pid: val for pid, val in new_points.items() if pid not in old_ids}
+
+    # annotate new code-heavy chunks only — chunks already in Qdrant are skipped
+    # entirely so the LLM is never called for unchanged content
+    if annotator is not None:
+        for pid in list(to_insert):
+            raw_text, doc = to_insert[pid]
+            if _is_code_heavy(raw_text):
+                annotation = annotator.annotate(raw_text)
+                if annotation:
+                    annotated_text = _insert_annotation(raw_text, annotation)
+                    to_insert[pid] = (annotated_text, doc)
+
     if to_insert:
         pids = list(to_insert)
         texts = [to_insert[pid][0] for pid in pids]
