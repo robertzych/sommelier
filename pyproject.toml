@@ -13,6 +13,7 @@ dependencies = [
     "tomli>=2.0.0; python_version < '3.11'",
     "mcp>=1.0.0",
     "langfuse>=4.0.0",
+    "tqdm>=4.0.0",
 ]
 
 [project.optional-dependencies]

@@ -267,21 +267,23 @@ Claude Code inherits `ANTHROPIC_API_KEY` from your shell, so no `env` block is n
 
 ## Running Ingestion
 
-Skip this section if you cloned the repo — pre-built Qdrant data is included.
+First time users may skip this section as pre-built Qdrant data is included in the repo.
 
 Run ingestion to build or rebuild the vector index from the official Pinot docs:
 
 ```bash
 # Clone the Pinot docs repo (separate from the apache/pinot monorepo)
-git clone https://github.com/apache/pinot-docs.git
+git clone https://github.com/pinot-contrib/pinot-docs
 
-# Index everything (first run takes a few minutes on CPU — no GPU required)
-uv run sommelier ingest --docs-path /path/to/pinot-docs --version latest
+# Index everything (incremental update takes ~15 minutes on CPU — no local GPU required)
+uv run sommelier ingest --docs-path /path/to/pinot-docs
 
 # Incremental update after a docs pull
 cd pinot-docs && git pull && cd ..
-uv run sommelier ingest --docs-path /path/to/pinot-docs --version latest
+uv run sommelier ingest --docs-path /path/to/pinot-docs
 ```
+
+On the first run, FastEmbed downloads the embedding (~219 MB) and BM25 models before indexing begins. After the downloads complete, a progress bar shows per-file progress. Full ingestion of the 628-file pinot-docs repo takes ~17 minutes on CPU.
 
 Subsequent runs skip unchanged chunks — only modified or new content is re-embedded. After re-indexing, commit the updated `qdrant_storage/` to make the new data available to others.
 

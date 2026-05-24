@@ -387,9 +387,13 @@ def ingest(
         else None
     )
 
-    docs_root = pathlib.Path(docs_path).resolve()
+    from tqdm import tqdm
 
-    for md_file in sorted(docs_root.rglob("*.md")):
+    docs_root = pathlib.Path(docs_path).resolve()
+    md_files = sorted(docs_root.rglob("*.md"))
+
+    totals = {"inserted": 0, "deleted": 0, "skipped": 0, "errors": 0}
+    for md_file in tqdm(md_files, desc="Indexing", unit="file"):
         file_path = str(md_file.relative_to(docs_root))
         raw_markdown = md_file.read_text(encoding="utf-8")
 
@@ -412,10 +416,22 @@ def ingest(
                 annotator=annotator,
             )
             tracer.emit("ingestion", stats)
+            for k in ("inserted", "deleted", "skipped"):
+                totals[k] += stats[k]
+            totals["errors"] += len(stats["errors"])
         except Exception as e:
             tracer.emit(
                 "ingestion",
                 {"inserted": 0, "deleted": 0, "skipped": 0, "errors": [str(e)]},
             )
+            totals["errors"] += 1
         finally:
             tracer.flush()
+
+    print(
+        f"Done. {len(md_files)} files — "
+        f"{totals['inserted']} inserted, "
+        f"{totals['deleted']} deleted, "
+        f"{totals['skipped']} skipped, "
+        f"{totals['errors']} errors"
+    )
