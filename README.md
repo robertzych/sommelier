@@ -275,7 +275,7 @@ Run ingestion to build or rebuild the vector index from the official Pinot docs:
 # Clone the Pinot docs repo (separate from the apache/pinot monorepo)
 git clone https://github.com/pinot-contrib/pinot-docs
 
-# Index everything (incremental update takes ~15 minutes on CPU — no local GPU required)
+# Index everything
 uv run sommelier ingest --docs-path /path/to/pinot-docs
 
 # Incremental update after a docs pull
@@ -283,7 +283,7 @@ cd pinot-docs && git pull && cd ..
 uv run sommelier ingest --docs-path /path/to/pinot-docs
 ```
 
-On the first run, FastEmbed downloads the embedding (~219 MB) and BM25 models before indexing begins. After the downloads complete, a progress bar shows per-file progress. Full ingestion of the 628-file pinot-docs repo takes ~17 minutes on CPU.
+On the first run, FastEmbed downloads the embedding (~219 MB) and BM25 models before indexing begins. After the downloads complete, a progress bar shows per-file progress. Full ingestion of the 628-file pinot-docs repo takes ~47 minutes on CPU (no local GPU required). ~29% of that time (~13 minutes) is LLM annotation calls for code-heavy chunks (552 out of 6,191 total chunks, ~1.5s per call).
 
 Subsequent runs skip unchanged chunks — only modified or new content is re-embedded. After re-indexing, commit the updated `qdrant_storage/` to make the new data available to others.
 
@@ -327,12 +327,6 @@ All configuration lives in `sommelier.toml`. Copy `sommelier.toml.example` as a 
 | `backend` | `qdrant_local` | Storage backend: `qdrant_local` (embedded, no server) or `qdrant_docker`. |
 | `path` | `./qdrant_storage` | Local storage directory (used when `backend = "qdrant_local"`). |
 | `docker_url` | `http://localhost:6333` | Qdrant server URL (used when `backend = "qdrant_docker"`). |
-
-### `[pinot]`
-
-| Field | Default | Description |
-|---|---|---|
-| `version` | `latest` | Metadata filter applied at retrieval time. Pass `--version 1.2` to the CLI to override per query. |
 
 ### `[observability]`
 
