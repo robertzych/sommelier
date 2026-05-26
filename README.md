@@ -8,23 +8,6 @@ A RAG assistant for Apache Pinot available as an MCP server for Claude Desktop a
 
 ---
 
-## Quick Start
-
-**Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
-
-**First run only**: FastEmbed downloads the embedding (219 MB) and reranker (92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
-
-```bash
-git clone https://github.com/robertzych/sommelier.git && cd sommelier
-uv sync
-cp sommelier.toml.example sommelier.toml   # set inference.api_key or export ANTHROPIC_API_KEY
-uv run sommelier query "What is the default broker port?"
-```
-
-Or wire it as an MCP server and ask directly inside Claude — see [Claude Desktop](docs/setup.md#using-sommelier-with-claude-desktop) and [Claude Code](docs/setup.md#using-sommelier-with-claude-code) in the setup guide.
-
----
-
 ## Introduction
 
 [Apache Pinot](https://pinot.apache.org/) is a distributed OLAP datastore built for real-time analytics at scale — used at LinkedIn, Uber, and Stripe to serve sub-second queries over billions of rows. Its configuration surface is dense: dozens of table config keys, multiple ingestion paths, pluggable components at every layer.
@@ -73,7 +56,7 @@ ChromaDB was ruled out — it has no native hybrid search, so implementing it wo
 
 Documents are fetched from the [pinot-contrib/pinot-docs](https://github.com/pinot-contrib/pinot-docs) GitBook repo, cleaned, and split into 512-token chunks with 50-token overlap. Each chunk is prepended with a section breadcrumb (`H1 > H2 > H3`) so retrieval models see document structure alongside local content. Two evaluation-driven transforms are applied before embedding: markdown config tables are converted to prose so property names and defaults co-locate in a single retrievable string, and code-heavy chunks (≥50% code characters) receive an LLM-generated `Description:` and `Question:` to give hybrid search a natural-language signal. Chunks are then encoded as both a dense vector and a sparse BM25 vector before being stored in Qdrant. Point IDs are SHA-256 content hashes, enabling incremental updates that insert only new or changed chunks and delete orphaned ones — unchanged chunks are skipped entirely.
 
-See [docs/ingestion.md](docs/ingestion.md) for the full design rationale, worked examples, and the reasoning behind choosing Qdrant over ChromaDB.
+See [docs/ingestion.md](docs/ingestion.md) for the full design rationale and worked examples.
 
 ### Retrieval Pipeline
 
@@ -148,32 +131,22 @@ Full per-question breakdown: [evals/results.md](evals/results.md)
 
 ---
 
-## Observability
+---
 
-Every query and ingestion run is traced to `sommelier_traces.jsonl`. Traces are JSON lines — one object per query — containing the full retrieval pipeline state:
+## Quick Start
 
-```json
-{
-  "event_type": "query",
-  "trace_id": "f3a2b1c0-...",
-  "ts": "2026-05-19T22:15:03Z",
-  "query": "What is the default broker port?",
-  "candidates": [
-    {"file_path": "reference/configuration-reference/broker.md", "rrf_score": 0.82},
-    {"file_path": "configuration-reference/server.md", "rrf_score": 0.61}
-  ],
-  "reranked": [
-    {"file_path": "reference/configuration-reference/broker.md", "cross_encoder_score": 0.91}
-  ],
-  "stage_latency_ms": {"retrieval": 450, "reranker": 2300, "llm": 2150},
-  "total_latency_ms": 4900,
-  "tokens": {"input": 2100, "output": 180}
-}
+**Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
+
+**First run only**: FastEmbed downloads the embedding (219 MB) and reranker (92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
+
+```bash
+git clone https://github.com/robertzych/sommelier.git && cd sommelier
+uv sync
+cp sommelier.toml.example sommelier.toml   # set inference.api_key or export ANTHROPIC_API_KEY
+uv run sommelier query "How do you configure a star-tree index in Pinot?"
 ```
 
-Key fields to look at: `candidates[*].file_path` (what the hybrid search found), `reranked[*].file_path` (what survived reranking), and `stage_latency_ms` (where time is spent). If a question gets a wrong answer, the trace tells you whether it's a retrieval miss (expected source not in candidates) or a reranker miss (expected source in candidates but dropped).
-
-For a browser-based UI, set `exporter = "langfuse"` in `sommelier.toml` and add your [Langfuse](https://langfuse.com/) API keys.
+Or wire it as an MCP server and ask directly inside Claude — see [Claude Desktop](docs/setup.md#using-sommelier-with-claude-desktop) and [Claude Code](docs/setup.md#using-sommelier-with-claude-code) in the setup guide.
 
 ---
 
@@ -182,6 +155,7 @@ For a browser-based UI, set `exporter = "langfuse"` in `sommelier.toml` and add 
 - [docs/setup.md](docs/setup.md) — Environment setup, CLI usage, and MCP integration for Claude Desktop and Claude Code
 - [docs/configuration.md](docs/configuration.md) — Full configuration reference for `sommelier.toml` (`[inference]`, `[retrieval]`, `[embeddings]`, `[vector_store]`, `[observability]`)
 - [docs/ingestion.md](docs/ingestion.md) — Ingestion pipeline design: chunking, markdown table normalization, LLM code annotation, embedding, incremental updates, and running ingestion
+- [docs/observability.md](docs/observability.md) — Trace schema, key fields for debugging retrieval misses, and Langfuse integration
 
 ---
 
