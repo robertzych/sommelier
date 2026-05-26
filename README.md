@@ -141,7 +141,7 @@ Follow-up questions carry full conversation context — no need to repeat backgr
 
 ![Claude Code Followup Question](Claude%20Code%20Followup%20Question.png)
 
-See [docs/setup.md](docs/setup.md) for environment setup and MCP wiring for [Claude Desktop](docs/setup.md#using-sommelier-with-claude-desktop) and [Claude Code](docs/setup.md#using-sommelier-with-claude-code).
+See [docs/setup.md](docs/setup.md) for environment setup and MCP wiring for [Claude Code](docs/setup.md#using-sommelier-with-claude-code) and [Claude Desktop](docs/setup.md#using-sommelier-with-claude-desktop).
 
 ---
 
