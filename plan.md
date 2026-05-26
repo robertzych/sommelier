@@ -808,9 +808,6 @@ Ingestion must complete before `sommelier query` or `sommelier chat` can answer 
 
 ## Next Steps (in order)
 
-### V1 Packaging
-1. Write `README.md`: setup instructions (git clone + `uv sync`), `sommelier ingest` usage, `sommelier query` and `sommelier chat` usage, configuration reference (`sommelier.toml`), observability overview, MCP client wiring (Claude Desktop `claude_desktop_config.json` and Claude Code `.mcp.json`)
-
 ---
 
 ## V2
@@ -883,4 +880,5 @@ Observed end-to-end latency is ~4.9s (retrieval ~450ms, reranker ~2.3s, LLM ~2.2
 
 ### V1 Packaging
 1. Wire `mcp_server.py`: `search_pinot(query: str, pinot_version: str = "latest")` tool in `src/mcp_server.py`; server-side `_history` list accumulates user+assistant turns across calls, capped at `memory_turns * 2`, so Sommelier's LLM has conversation context for follow-up questions. Lazy initialization — pipeline loads on first tool call, not at import. Tool docstring instructs Claude Desktop to pass questions verbatim and display responses as-is (including Sources). `sommelier-mcp` script entry added to `pyproject.toml`. Claude Desktop config: `command = uv run --directory <repo> sommelier-mcp` with `ANTHROPIC_API_KEY` in `env`; setting "For any Apache Pinot question, always use the search_pinot tool" in Claude Desktop's global instructions eliminates the need to prefix queries. Claude Code config: `.mcp.json` at project root with same command; `.claude/settings.json` sets `enableAllProjectMcpServers: true`; no prefix required and multi-turn follow-ups work automatically. 6 tests in `tests/test_mcp_server.py`.
+2. Write `README.md`: portfolio-focused public README targeting AI engineers and hiring managers. Sections: Quick Start (5-command path to first answer), Introduction (Pinot context + knowledge cutoff problem), Design Overview (chunking pipeline, hybrid search, two-stage reranking, LLM code annotation, incremental ingestion, Why Qdrant, system prompt design), V1 Evaluation Results (quality and retrieval tables), Roadmap/V2, Environment Setup, CLI usage, Claude Desktop/Code MCP wiring (`.mcp.json.example` + gitignore pattern), Running Ingestion (tqdm progress, ~17 min for 628 files), Configuration Reference, Observability, License. Key fixes made during this step: annotation deferral (moved LLM annotation from `_chunk_markdown` to `index_file` post-`to_insert` determination — second run dropped from 19 min to 55 sec); `derive_point_id` updated to include `file_path` in SHA-256 hash (prevented cross-file ID collisions from two files with identical frontmatter); `tqdm` added to dependencies for ingestion progress bar.
 
