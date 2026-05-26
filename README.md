@@ -40,7 +40,7 @@ On a 25-question golden set, Sommelier scores 2.96/3 versus 1.48/3 for raw Claud
 - LLM code annotation for code-heavy chunks
 - Hybrid retrieval (BM25 + dense embeddings + RRF)
 - Cross-encoder reranking
-- Multi-provider LLM support via LiteLLM (Anthropic, OpanAI, Ollama)
+- Multi-provider LLM support via LiteLLM (Anthropic, OpenAI, Ollama)
 - Multi-turn conversational memory
 - MCP server integration for Claude Desktop/Code
 - Retrieval observability and trace logging
@@ -131,22 +131,17 @@ Full per-question breakdown: [evals/results.md](evals/results.md)
 
 ---
 
----
+## Demonstration
 
-## Quick Start
+With Sommelier wired as an MCP server, Pinot questions are answered directly inside Claude Code with source-grounded context. Here's an example multi-turn session:
 
-**Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
+![Claude Code Parent Question](Claude%20Code%20Parent%20Question.png)
 
-**First run only**: FastEmbed downloads the embedding (219 MB) and reranker (92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
+Follow-up questions carry full conversation context — no need to repeat background in each turn.
 
-```bash
-git clone https://github.com/robertzych/sommelier.git && cd sommelier
-uv sync
-cp sommelier.toml.example sommelier.toml   # set inference.api_key or export ANTHROPIC_API_KEY
-uv run sommelier query "How do you configure a star-tree index in Pinot?"
-```
+![Claude Code Followup Question](Claude%20Code%20Followup%20Question.png)
 
-Or wire it as an MCP server and ask directly inside Claude — see [Claude Desktop](docs/setup.md#using-sommelier-with-claude-desktop) and [Claude Code](docs/setup.md#using-sommelier-with-claude-code) in the setup guide.
+See [docs/setup.md](docs/setup.md) for environment setup and MCP wiring for [Claude Desktop](docs/setup.md#using-sommelier-with-claude-desktop) and [Claude Code](docs/setup.md#using-sommelier-with-claude-code).
 
 ---
 

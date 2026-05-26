@@ -1,5 +1,22 @@
 # Setup
 
+## Quick Start
+
+**Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
+
+**First run only**: FastEmbed downloads the embedding (219 MB) and reranker (92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
+
+```bash
+git clone https://github.com/robertzych/sommelier.git && cd sommelier
+uv sync
+cp sommelier.toml.example sommelier.toml   # set inference.api_key or export ANTHROPIC_API_KEY
+uv run sommelier query "How do you configure a star-tree index in Pinot?"
+```
+
+Or wire it as an MCP server — see [Using Sommelier with Claude Desktop](#using-sommelier-with-claude-desktop) and [Using Sommelier with Claude Code](#using-sommelier-with-claude-code) below.
+
+---
+
 ## Environment Setup
 
 **Prerequisites**: [git](https://git-scm.com/), [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY` (or another [LiteLLM-supported](https://docs.litellm.ai/docs/providers) provider — see [configuration.md](configuration.md)).
