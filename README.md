@@ -75,6 +75,8 @@ Qdrant's native Reciprocal Rank Fusion (RRF) merges the two ranked lists. Chunks
 
 Bi-encoders (used in Stage 1) embed query and document independently — fast at scale, but imprecise. A cross-encoder (`Xenova/ms-marco-MiniLM-L-6-v2`) scores each (query, chunk) pair jointly, attending to interactions between the two. More accurate, but too slow to run against the full collection. The 20→5 funnel gets both: fast broad retrieval, then precise reranking on a small candidate set.
 
+> **Model selection note:** `Xenova/ms-marco-MiniLM-L-6-v2` was chosen as the FastEmbed cross-encoder default — it runs locally via ONNX with no API key, using the same interface as the dense and sparse embedding models already in the pipeline. It was not formally benchmarked against alternatives before V1; the choice was driven by local-first constraints and the need to validate the base pipeline first. Two alternatives are wired in or identified for V1.1: **Cohere Rerank** (`rerank-multilingual-v3.0`) is already supported as an optional path (`reranker = "cohere"` in config, requires `COHERE_API_KEY`), and **larger cross-encoder models** are flagged as candidates after a known reranker failure (q015) where the model drops a markdown comparison table chunk that ranks first in candidates@20 — a pattern suggesting the model struggles with tabular content.
+
 ```
 User query
     ├── dense embed ──→ top 20 by cosine ──┐
