@@ -10,9 +10,17 @@ Two retrieval problems emerged during evaluation and required additional transfo
 
 ## Markdown Table Normalization
 
-Pinot's config reference docs store property names, default values, and descriptions in separate markdown columns; when chunked, the semantic link between a property and its default is lost. A query for the default broker port retrieved chunks from `broker.md` with empty default columns — the chunk containing the answer (8099) used different vocabulary ("deprecated", "legacy") and was never retrieved.
+Pinot's config reference docs store property names, default values, and descriptions in separate markdown columns; when chunked, the semantic link between a property and its default is lost. A query for the default broker port couldn't retrieve the ideal chunk from from the expected source document. The original chunk contained the following pipe-delimited text:
 
-Fix: tables whose second column header contains "default" are converted to prose — `"<property>: default <value>. <description>"` — co-locating all three in one retrievable string.
+```
+| pinot.broker.client.queryPort                                   | 8099                                                                  | **(Deprecated: use `pinot.broker.client.access.protocols.http.port` instead.)** Legacy port to query broker via http.
+```
+
+The fix detects tables whose second column header contains "default" and merges the row into one retrievable string:
+
+```
+pinot.broker.client.queryPort: default 8099. **(Deprecated: use `pinot.broker.client.access.protocols.http.port` instead.)** Legacy port to query broker via http.
+```
 
 ## LLM Code Annotation
 
