@@ -1,22 +1,5 @@
 # Setup
 
-## Quick Start
-
-**Requires**: git, [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY`.
-
-**First run only**: FastEmbed downloads the embedding (219 MB) and reranker (92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
-
-```bash
-git clone https://github.com/robertzych/sommelier.git && cd sommelier
-uv sync
-cp sommelier.toml.example sommelier.toml   # set inference.api_key or export ANTHROPIC_API_KEY
-uv run sommelier query "How do you configure a star-tree index in Pinot?"
-```
-
-Or wire it as an MCP server — see [Using Sommelier with Claude Desktop](#using-sommelier-with-claude-desktop) and [Using Sommelier with Claude Code](#using-sommelier-with-claude-code) below.
-
----
-
 ## Environment Setup
 
 **Prerequisites**: [git](https://git-scm.com/), [uv](https://github.com/astral-sh/uv), Python 3.11+, and an `ANTHROPIC_API_KEY` (or another [LiteLLM-supported](https://docs.litellm.ai/docs/providers) provider — see [configuration.md](configuration.md)).
@@ -37,8 +20,6 @@ uv sync
 
 `uv sync` downloads all Python dependencies into an isolated virtual environment. Pre-built Qdrant data is included in the repo — no separate download needed.
 
-On the **first query**, FastEmbed downloads the embedding (~219 MB) and reranker (~92 MB) ONNX models and caches them in `~/.cache`. Subsequent runs skip this step.
-
 **2. Configure**
 
 ```bash
@@ -55,19 +36,32 @@ api_key = "sk-ant-..."   # or export ANTHROPIC_API_KEY in your shell
 
 ---
 
-## Using Sommelier from the CLI
+## Using Sommelier with Claude Code
 
-**One-shot query:**
+**1. Complete [Environment Setup](#environment-setup) (steps 1–2)**
 
-```bash
-uv run sommelier query "What is the default broker port?"
-```
-
-**Multi-turn REPL** (conversation memory across turns, Ctrl+C to exit):
+**2. Create `.mcp.json` from the example**
 
 ```bash
-uv run sommelier chat
+cp .mcp.json.example .mcp.json
 ```
+
+Edit `.mcp.json` and set `--directory` to the absolute path of the cloned repo:
+
+```json
+{
+  "mcpServers": {
+    "sommelier": {
+      "command": "uv",
+      "args": ["run", "--directory", "/where/you/cloned/sommelier", "sommelier-mcp"]
+    }
+  }
+}
+```
+
+Claude Code inherits `ANTHROPIC_API_KEY` from your shell, so no `env` block is needed. Open a Claude Code session in the `sommelier/` directory and ask any Apache Pinot question — the tool is called automatically. Follow-up questions carry full conversation context.
+
+**Using Sommelier in other projects**: copy `.mcp.json.example` and `.claude/settings.json` to that project's root directory, rename to `.mcp.json`, and update `--directory` to point to your Sommelier clone.
 
 ---
 
@@ -114,29 +108,20 @@ Ask any Apache Pinot question. You should see a tool call to `search_pinot` and 
 
 ---
 
-## Using Sommelier with Claude Code
+## Using Sommelier from the CLI
 
 **1. Complete [Environment Setup](#environment-setup) (steps 1–2)**
 
-**2. Create `.mcp.json` from the example**
+**One-shot query:**
 
 ```bash
-cp .mcp.json.example .mcp.json
+uv run sommelier query "What is the default broker port?"
 ```
 
-Edit `.mcp.json` and set `--directory` to the absolute path of the cloned repo:
+**Multi-turn REPL** (conversation memory across turns, Ctrl+C to exit):
 
-```json
-{
-  "mcpServers": {
-    "sommelier": {
-      "command": "uv",
-      "args": ["run", "--directory", "/where/you/cloned/sommelier", "sommelier-mcp"]
-    }
-  }
-}
+```bash
+uv run sommelier chat
 ```
 
-Claude Code inherits `ANTHROPIC_API_KEY` from your shell, so no `env` block is needed. Open a Claude Code session in the `sommelier/` directory and ask any Apache Pinot question — the tool is called automatically. Follow-up questions carry full conversation context.
-
-**Using Sommelier in other projects**: copy `.mcp.json.example` and `.claude/settings.json` to that project's root directory, rename to `.mcp.json`, and update `--directory` to point to your Sommelier clone.
+**First run only**: FastEmbed downloads the embedding (219 MB) and reranker (92 MB) ONNX models on the first query. Subsequent runs use the cached models in `~/.cache`.
