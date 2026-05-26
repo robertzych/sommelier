@@ -4,7 +4,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-purple)](https://github.com/astral-sh/uv)
 
-A RAG assistant for Apache Pinot available as an MCP server for Claude Code and Claude Desktop.
+A RAG assistant for Apache Pinot available as an MCP server for Claude CodeC and Claude Desktop.
 
 ---
 
@@ -136,6 +136,8 @@ Full per-question breakdown: [evals/results.md](evals/results.md)
 With Sommelier wired as an MCP server, Pinot questions are answered directly inside Claude Code with source-grounded context. Here's an example multi-turn session:
 
 ![Claude Code Parent Question](Claude%20Code%20Parent%20Question.png)
+
+![Claude Code Parent Answer](Claude%20Code%20Parent%20Answer.png)
 
 Follow-up questions carry full conversation context — no need to repeat background in each turn.
 
