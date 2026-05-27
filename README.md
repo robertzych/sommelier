@@ -4,7 +4,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-purple)](https://github.com/astral-sh/uv)
 
-A RAG assistant for Apache Pinot available as an MCP server for Claude Code and Claude Desktop.
+A RAG assistant for Apache Pinot Q&A available as an MCP server for Claude Code and Claude Desktop.
 
 ---
 
