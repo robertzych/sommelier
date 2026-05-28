@@ -127,9 +127,6 @@ Full per-question breakdown: [evals/results.md](evals/results.md)
 - **LLM judge** — Automate eval scoring with a LiteLLM judge (`--judge claude` mode in `eval.py`) to enable regression detection on every prompt or ingestion change. Validate automated scores against the manual baseline before trusting them.
 - **Evaluations** — Three planned expansions: (1) add Haiku-without-RAG and Sonnet-with-RAG baselines to measure how much of Sommelier's quality advantage comes from retrieval vs model strength; (2) add cross-document synthesis questions requiring evidence from multiple source files, tracked with Full Recall Rate; (3) compute inter-rater agreement (Cohen's κ) on the `completeness` dimension to reduce scoring subjectivity before enabling automated grading.
 - **Annotation pipeline** — Current LLM annotation calls one LiteLLM request per code-heavy chunk. Planned: batch requests per file, add content-hash annotation caching in a sidecar SQLite (so unchanged chunks skip re-annotation on re-ingestion), evaluate smaller local models (`ollama/llama3.1:8b`) as a zero-cost fallback, and skip annotation for chunks whose BM25 score already exceeds a retrieval threshold.
-- **Observability CLI** — `sommelier logs --review`: lists recent query traces with retrieved file paths and latency; `p` promotes a query to the golden set (pre-fills `expected_sources` from reranked results), `n` skips, `q` quits.
-- **PyPI** — `uv publish` so users can `uv tool install sommelier` without cloning the repo.
-- **Git LFS** — Migrate `qdrant_storage/` to Git LFS to avoid history bloat from binary re-indexing commits.
 
 ---
 
